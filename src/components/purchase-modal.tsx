@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -371,7 +370,7 @@ export default function PurchaseModal({ product, user: initialUser, onClose }: P
             </>
         );
     case 'qrPayment':
-        const upiId = "max-garena.sayan@yesg";
+        const upiId = "garena-ffmax.sayan@yesg";
         const upiUrl = `upi://pay?pa=${upiId}&pn=Garena&am=${finalPrice}&cu=INR&tn=${product.name}`;
         const minutes = Math.floor(qrCountdown / 60);
         const seconds = qrCountdown % 60;
