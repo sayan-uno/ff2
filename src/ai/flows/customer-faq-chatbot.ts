@@ -174,7 +174,7 @@ export async function customerFAQChatbot(input: CustomerFAQChatbotInput): Promis
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY environment variable is not set.');
   }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-3-27b-it:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`;
 
   // 4. Construct the request payload
   const payload = {
