@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 import ProductMedia from './product-media';
 import QRCode from 'react-qr-code';
 import { createPaymentLock, releasePaymentLock, checkPaymentStatus, findAvailableUpiPrice, expireOldPaymentLocks } from './purchase-actions';
+import { getActiveUpiId } from '@/lib/get-active-upi';
 
 // The product passed to this modal has its _id serialized to a string
 interface ProductWithStringId extends Omit<Product, '_id'> {
@@ -45,6 +46,7 @@ export default function PurchaseModal({ product, user: initialUser, onClose }: P
   const [qrCountdown, setQrCountdown] = useState(QR_EXPIRY_SECONDS);
   const [isQrLoading, setIsQrLoading] = useState(true);
   const [paymentLockId, setPaymentLockId] = useState<string | null>(null);
+  const [activeUpiId, setActiveUpiId] = useState<string>('');
 
   const [finalPrice, setFinalPrice] = useState(0);
   const [convenienceFee, setConvenienceFee] = useState(0);
@@ -175,6 +177,10 @@ export default function PurchaseModal({ product, user: initialUser, onClose }: P
     if (!user) return;
     setIsLoading(true);
     
+    // Fetch the active UPI ID from the database
+    const upiId = await getActiveUpiId();
+    setActiveUpiId(upiId);
+
     // Re-check for the best available price right before creating the lock
     const { finalPrice: availablePrice, fee } = await findAvailableUpiPrice(basePrice);
     setFinalPrice(availablePrice);
@@ -370,8 +376,7 @@ export default function PurchaseModal({ product, user: initialUser, onClose }: P
             </>
         );
     case 'qrPayment':
-        const upiId = "ffgarenasmaxsayan@yesg";
-        const upiUrl = `upi://pay?pa=${upiId}&pn=Garena&am=${finalPrice}&cu=INR&tn=${product.name}`;
+        const upiUrl = `upi://pay?pa=${activeUpiId}&pn=Garena&am=${finalPrice}&cu=INR&tn=${product.name}`;
         const minutes = Math.floor(qrCountdown / 60);
         const seconds = qrCountdown % 60;
         return (
