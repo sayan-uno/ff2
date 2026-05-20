@@ -13,8 +13,9 @@ import { sendNotification, sendNotificationToAll } from '@/app/actions';
 import { Loader2, Send, SendToBack } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
+import { useRouter } from 'next/navigation';
 
-function SubmitButton({ isSendingAll, children }: { isSendingAll?: boolean; children: React.ReactNode }) {
+function SubmitButton({ children }: { children: React.ReactNode }) {
     const { pending } = useFormStatus();
     return (
          <Button type="submit" className="w-full" disabled={pending}>
@@ -26,8 +27,10 @@ function SubmitButton({ isSendingAll, children }: { isSendingAll?: boolean; chil
 
 export default function NotificationsPage() {
   const { toast } = useToast();
+  const router = useRouter();
   const singleUserFormRef = useRef<HTMLFormElement>(null);
   const allUsersFormRef = useRef<HTMLFormElement>(null);
+  const [showSendAllDialog, setShowSendAllDialog] = useState(false);
 
   const handleSendSingle = async (formData: FormData) => {
     const result = await sendNotification(formData);
@@ -42,8 +45,11 @@ export default function NotificationsPage() {
   const handleSendAll = async (formData: FormData) => {
     const result = await sendNotificationToAll(formData);
      if (result.success) {
-      toast({ title: 'Success', description: result.message });
+      toast({ title: 'Success', description: result.message + ' Track progress in Users Notification page.' });
       allUsersFormRef.current?.reset();
+      setShowSendAllDialog(false);
+      // Navigate to Users Notification page to see progress
+      router.push('/admin/users-notification?tab=broadcasts');
     } else {
       toast({ variant: 'destructive', title: 'Error', description: result.message });
     }
@@ -81,7 +87,7 @@ export default function NotificationsPage() {
                     <Send className="mr-2"/> Send to Specific User
                 </SubmitButton>
                 
-                <AlertDialog>
+                <AlertDialog open={showSendAllDialog} onOpenChange={setShowSendAllDialog}>
                     <AlertDialogTrigger asChild>
                         <Button type="button" variant="secondary" className="w-full">
                             <SendToBack className="mr-2 h-4 w-4" />
@@ -93,7 +99,7 @@ export default function NotificationsPage() {
                             <AlertDialogHeader>
                                 <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                    This will send the notification to every single user. This action cannot be undone.
+                                    This will send the notification to every single user. Push notifications will be delivered in batches of 500. You can track progress in the Users Notification page.
                                 </AlertDialogDescription>
                             </AlertDialogHeader>
                              <div className="space-y-4 my-4">
@@ -126,5 +132,3 @@ export default function NotificationsPage() {
     </div>
   );
 }
-
-    

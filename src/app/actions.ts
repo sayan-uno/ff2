@@ -1754,7 +1754,7 @@ const sendToAllSchema = z.object({
   isPopup: z.enum(['on', 'off']).optional(),
 });
 
-export async function sendNotificationToAll(formData: FormData): Promise<{ success: boolean; message: string }> {
+export async function sendNotificationToAll(formData: FormData): Promise<{ success: boolean; message: string; broadcastId?: string }> {
     const isAdmin = await isAdminAuthenticated();
     if (!isAdmin) {
         return { success: false, message: 'Unauthorized' };
@@ -1776,6 +1776,26 @@ export async function sendNotificationToAll(formData: FormData): Promise<{ succe
         return { success: false, message: 'No active users found to send notifications to.' };
     }
 
+    // Step 1: Create a single broadcast notification document
+    const tokens = allUsers
+        .filter(u => !!u.fcmToken)
+        .map(u => ({ token: u.fcmToken as string, gamingId: u.gamingId }));
+
+    const broadcastDoc = {
+        message,
+        imageUrl: imageUrl || undefined,
+        isPopup,
+        createdAt: new Date(),
+        totalUsers: allUsers.length,
+        pushTotal: tokens.length,
+        pushSent: 0,
+        pushFailed: 0,
+        status: 'sending' as const,
+    };
+    const broadcastResult = await db.collection('broadcast_notifications').insertOne(broadcastDoc);
+    const broadcastId = broadcastResult.insertedId.toString();
+
+    // Step 2: Insert individual notification documents tagged with broadcastId
     const notifications: Omit<Notification, '_id'>[] = allUsers.map(user => ({
         gamingId: user.gamingId,
         message,
@@ -1783,24 +1803,33 @@ export async function sendNotificationToAll(formData: FormData): Promise<{ succe
         isRead: false,
         createdAt: new Date(),
         isPopup: isPopup,
+        broadcastId: broadcastId,
     }));
 
-    await db.collection<Notification>('notifications').insertMany(notifications as Notification[]);
+    await db.collection<Notification>('notifications').insertMany(notifications as Notification[], { ordered: false });
 
-    // Send push notifications
-    const tokens = allUsers.map(u => u.fcmToken).filter((t): t is string => !!t);
+    // Step 3: Send batched push notifications (fire-and-forget, progress tracked via DB)
     if (tokens.length > 0) {
-        await sendMulticastPushNotification({
+        // Import dynamically to keep this file's existing imports unchanged
+        const { sendBatchedPushNotifications } = await import('@/lib/broadcast-push-notifications');
+        // Fire and forget — don't await. Progress is tracked in the DB via SSE.
+        sendBatchedPushNotifications(
             tokens,
-            title: 'Garena Store',
-            body: message,
-            imageUrl: imageUrl || undefined,
-        });
+            'Garena Store',
+            message,
+            broadcastId,
+            imageUrl || undefined
+        ).catch(err => console.error('[Broadcast] Background push sending failed:', err));
+    } else {
+        // No tokens to send, mark as completed immediately
+        await db.collection('broadcast_notifications').updateOne(
+            { _id: broadcastResult.insertedId },
+            { $set: { status: 'completed' } }
+        );
     }
 
-
     revalidatePath('/');
-    return { success: true, message: `Notification sent to ${allUsers.length} users.` };
+    return { success: true, message: `Notification sent to ${allUsers.length} users. Push notifications are being delivered in batches.`, broadcastId };
 }
 
 export async function getNotificationsForUser(): Promise<Notification[]> {

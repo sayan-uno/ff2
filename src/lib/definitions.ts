@@ -118,6 +118,22 @@ export interface Notification {
     isRead: boolean;
     createdAt: Date;
     isPopup?: boolean;
+    broadcastId?: string; // Links to a BroadcastNotification if this was part of a broadcast
+    pushDelivered?: boolean; // True if Firebase push notification was successfully sent
+}
+
+export interface BroadcastNotification {
+    _id: ObjectId;
+    message: string;
+    imageUrl?: string;
+    isPopup?: boolean;
+    createdAt: Date;
+    totalUsers: number;        // How many users were targeted
+    pushTotal: number;         // How many users had FCM tokens (actual push targets)
+    pushSent: number;          // How many push notifications succeeded
+    pushFailed: number;        // How many push notifications failed
+    status: 'sending' | 'completed' | 'failed';
+    removedTokenGamingIds?: string[]; // Gaming IDs of users whose FCM tokens were invalid and removed
 }
 
 export interface Event {

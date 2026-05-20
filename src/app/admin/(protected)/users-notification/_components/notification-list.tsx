@@ -1,232 +1,370 @@
 
 'use client';
 
-import { useState, useTransition, useEffect } from 'react';
+import { useState, useTransition, useEffect, useCallback } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Loader2, Search, ArrowUpDown, Trash2, Image as ImageIcon } from 'lucide-react';
+import { Loader2, Search, ArrowUpDown, Trash2, Megaphone, Users, CheckCircle2, XCircle, Clock, Eye, EyeOff, Info, ChevronDown, ShieldX, Bell, BellOff, Smartphone } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { getNotifications, deleteNotification } from '../actions';
-import type { Notification } from '@/lib/definitions';
+import { getNotifications, deleteNotification, getBroadcastNotifications, deleteBroadcastNotification, getBroadcastDetails, searchBroadcastUser } from '../actions';
+import type { Notification, BroadcastNotification } from '@/lib/definitions';
+import type { BroadcastDetailUser, BroadcastDetails, BroadcastUserSearchResult } from '../actions';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import Image from 'next/image';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Progress } from '@/components/ui/progress';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 
 interface NotificationListProps {
   initialNotifications: Notification[];
   initialHasMore: boolean;
   totalNotifications: number;
+  initialBroadcasts: BroadcastNotification[];
+  initialBroadcastHasMore: boolean;
+  totalBroadcasts: number;
+  initialTab: string;
 }
 
 const FormattedDate = ({ dateString }: { dateString: string }) => {
     const [mounted, setMounted] = useState(false);
     useEffect(() => setMounted(true), []);
     if (!mounted) return null;
-    const date = new Date(dateString);
-    return date.toLocaleString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-    });
+    return new Date(dateString).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric' });
 }
 
 const NotificationMedia = ({ src, alt }: { src: string; alt: string }) => {
   const isVideo = src.endsWith('.mp4') || src.endsWith('.webm');
-
-  if (isVideo) {
-    return (
-      <video
-        src={src}
-        autoPlay
-        loop
-        muted
-        playsInline
-        className="w-full h-full object-cover"
-      />
-    );
-  }
-
-  return (
-    <Image
-      src={src}
-      alt={alt}
-      fill
-      className="object-cover"
-    />
-  );
+  if (isVideo) return <video src={src} autoPlay loop muted playsInline className="w-full h-full object-cover" />;
+  return <Image src={src} alt={alt} fill className="object-cover" />;
 };
 
 const ClickableMessage = ({ message }: { message: string }) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const parts = message.split(urlRegex);
-
   return (
     <p className="text-sm break-words">
-      {parts.map((part, index) => {
-        if (part.match(urlRegex)) {
-          return (
-            <a
-              key={index}
-              href={part}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 hover:underline break-all"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {part}
-            </a>
-          );
-        }
-        return part;
-      })}
+      {parts.map((part, i) => part.match(urlRegex) ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all" onClick={e => e.stopPropagation()}>{part}</a> : part)}
     </p>
   );
 };
 
+const StatusBadge = ({ status }: { status: string }) => {
+  if (status === 'completed') return <Badge className="bg-green-600 hover:bg-green-700"><CheckCircle2 className="h-3 w-3 mr-1" />Completed</Badge>;
+  if (status === 'sending') return <Badge className="bg-blue-600 hover:bg-blue-700 animate-pulse"><Clock className="h-3 w-3 mr-1" />Sending...</Badge>;
+  if (status === 'failed') return <Badge variant="destructive"><XCircle className="h-3 w-3 mr-1" />Failed</Badge>;
+  return <Badge variant="secondary">{status}</Badge>;
+};
 
-export default function NotificationList({ initialNotifications, initialHasMore, totalNotifications }: NotificationListProps) {
+function BroadcastInlineProgress({ broadcastId, onComplete }: { broadcastId: string; onComplete: () => void }) {
+  const [progress, setProgress] = useState({ pushSent: 0, pushFailed: 0, pushTotal: 0, totalUsers: 0, status: 'sending', done: false });
+  useEffect(() => {
+    const es = new EventSource(`/api/broadcast-progress?id=${broadcastId}`);
+    es.onmessage = (e) => { try { const d = JSON.parse(e.data); setProgress(d); if (d.done) { es.close(); onComplete(); } } catch {} };
+    es.onerror = () => es.close();
+    return () => es.close();
+  }, [broadcastId, onComplete]);
+  const total = progress.pushTotal || progress.totalUsers;
+  const processed = progress.pushSent + progress.pushFailed;
+  const pct = total > 0 ? Math.min(Math.round((processed / total) * 100), 100) : 0;
+  return (
+    <div className="space-y-2 pt-2 border-t">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span className="flex items-center gap-1 animate-pulse"><Clock className="h-3 w-3" /> Sending push notifications...</span>
+        <span>{pct}%</span>
+      </div>
+      <Progress value={pct} className="h-2" />
+      <div className="flex items-center gap-3 text-xs">
+        <span className="text-green-600">{progress.pushSent} sent</span>
+        <span className="text-red-500">{progress.pushFailed} failed</span>
+        <span className="text-muted-foreground">of {total} tokens</span>
+      </div>
+    </div>
+  );
+}
+
+// --- User Search Result Card ---
+function UserSearchResultCard({ result }: { result: BroadcastUserSearchResult }) {
+  if (!result.hasNotification) {
+    return <div className="p-4 rounded-lg border bg-muted/50 text-center"><p className="text-sm text-muted-foreground">User <span className="font-mono font-bold">{result.gamingId}</span> was not part of this broadcast.</p></div>;
+  }
+  return (
+    <div className="p-4 rounded-lg border space-y-3">
+      <p className="font-mono font-bold text-sm">{result.gamingId}</p>
+      <div className="grid grid-cols-3 gap-2">
+        <div className="flex flex-col items-center gap-1 p-2 rounded-md bg-muted/50">
+          {result.isRead ? <Eye className="h-4 w-4 text-green-600" /> : <EyeOff className="h-4 w-4 text-orange-500" />}
+          <span className="text-xs font-medium">{result.isRead ? 'Read' : 'Unread'}</span>
+        </div>
+        <div className="flex flex-col items-center gap-1 p-2 rounded-md bg-muted/50">
+          {result.pushDelivered ? <Smartphone className="h-4 w-4 text-green-600" /> : <BellOff className="h-4 w-4 text-orange-500" />}
+          <span className="text-xs font-medium">{result.pushDelivered ? 'Push Sent' : 'In-App Only'}</span>
+        </div>
+        <div className="flex flex-col items-center gap-1 p-2 rounded-md bg-muted/50">
+          {result.tokenRemoved ? <ShieldX className="h-4 w-4 text-red-500" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
+          <span className="text-xs font-medium">{result.tokenRemoved ? 'Token Removed' : 'Token OK'}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- More Details Dialog ---
+function BroadcastDetailsDialog({ broadcastId, isOpen, onClose }: { broadcastId: string; isOpen: boolean; onClose: () => void }) {
+  const [details, setDetails] = useState<BroadcastDetails | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [userPage, setUserPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [detailTab, setDetailTab] = useState('users');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResult, setSearchResult] = useState<BroadcastUserSearchResult | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && broadcastId) {
+      setLoading(true); setUserPage(1); setDetails(null); setSearchResult(null); setSearchQuery('');
+      getBroadcastDetails(broadcastId, 1).then(r => { if (r.success && r.details) setDetails(r.details); setLoading(false); });
+    }
+  }, [isOpen, broadcastId]);
+
+  const handleLoadMore = async () => {
+    if (!details) return;
+    setLoadingMore(true);
+    const next = userPage + 1;
+    const r = await getBroadcastDetails(broadcastId, next);
+    if (r.success && r.details) {
+      setDetails(prev => prev ? { ...prev, users: [...prev.users, ...r.details!.users], hasMoreUsers: r.details!.hasMoreUsers } : r.details!);
+      setUserPage(next);
+    }
+    setLoadingMore(false);
+  };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setSearching(true); setSearchResult(null);
+    const r = await searchBroadcastUser(broadcastId, searchQuery.trim());
+    if (r.success && r.result) setSearchResult(r.result);
+    setSearching(false);
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Info className="h-5 w-5" /> Broadcast Details</DialogTitle>
+          <DialogDescription>Search a user or browse delivery stats.</DialogDescription>
+        </DialogHeader>
+
+        {/* Search Bar */}
+        <form onSubmit={handleSearch} className="flex items-center gap-2">
+          <Input placeholder="Search Gaming ID..." value={searchQuery} onChange={e => { setSearchQuery(e.target.value); if (!e.target.value) setSearchResult(null); }} className="flex-1" />
+          <Button type="submit" size="icon" variant="outline" disabled={searching}>
+            {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+          </Button>
+        </form>
+
+        {searchResult && <UserSearchResultCard result={searchResult} />}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
+        ) : details ? (
+          <div className="flex-1 min-h-0 space-y-4">
+            {/* Summary */}
+            <div className="grid grid-cols-3 gap-3 text-center p-3 rounded-lg bg-muted/50">
+              <div><div className="flex items-center justify-center gap-1"><Eye className="h-4 w-4 text-green-600" /><span className="text-xl font-bold text-green-600">{details.totalRead}</span></div><p className="text-xs text-muted-foreground">Read</p></div>
+              <div><div className="flex items-center justify-center gap-1"><Smartphone className="h-4 w-4 text-blue-500" /><span className="text-xl font-bold text-blue-500">{details.totalPushDelivered}</span></div><p className="text-xs text-muted-foreground">Push Delivered</p></div>
+              <div><div className="flex items-center justify-center gap-1"><ShieldX className="h-4 w-4 text-red-500" /><span className="text-xl font-bold text-red-500">{details.removedTokenGamingIds.length}</span></div><p className="text-xs text-muted-foreground">Tokens Removed</p></div>
+            </div>
+
+            <Tabs value={detailTab} onValueChange={setDetailTab} className="flex-1 min-h-0 flex flex-col">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="users" className="text-xs"><Users className="h-3.5 w-3.5 mr-1" />Users ({details.totalRead + details.totalUnread})</TabsTrigger>
+                <TabsTrigger value="removed" className="text-xs"><ShieldX className="h-3.5 w-3.5 mr-1" />Removed ({details.removedTokenGamingIds.length})</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="users" className="flex-1 min-h-0 mt-2">
+                <ScrollArea className="h-[250px] rounded-md border">
+                  <div className="p-3 space-y-1">
+                    {details.users.map((user, idx) => {
+                      const prev = idx > 0 ? details.users[idx - 1] : null;
+                      const showPushSeparator = prev && prev.isRead && !user.isRead && user.pushDelivered;
+                      const showInAppSeparator = prev && (prev.isRead || prev.pushDelivered) && !user.isRead && !user.pushDelivered;
+                      return (
+                        <div key={`${user.gamingId}-${idx}`}>
+                          {showPushSeparator && <div className="flex items-center gap-2 py-2"><Separator className="flex-1" /><span className="text-xs text-muted-foreground whitespace-nowrap">Push Delivered (Unread)</span><Separator className="flex-1" /></div>}
+                          {showInAppSeparator && <div className="flex items-center gap-2 py-2"><Separator className="flex-1" /><span className="text-xs text-muted-foreground whitespace-nowrap">In-App Only</span><Separator className="flex-1" /></div>}
+                          <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50">
+                            <span className="text-sm font-mono">{user.gamingId}</span>
+                            <div className="flex items-center gap-1">
+                              {user.isRead && <Badge variant="secondary" className="text-xs"><Eye className="h-3 w-3 mr-1" />Read</Badge>}
+                              {user.pushDelivered && <Badge className="text-xs bg-blue-500 hover:bg-blue-600"><Smartphone className="h-3 w-3 mr-1" />Push</Badge>}
+                              {!user.pushDelivered && !user.isRead && <Badge variant="outline" className="text-xs text-orange-500 border-orange-300"><BellOff className="h-3 w-3 mr-1" />In-App</Badge>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {details.hasMoreUsers && (
+                      <div className="flex justify-center pt-2">
+                        <Button variant="ghost" size="sm" onClick={handleLoadMore} disabled={loadingMore}>
+                          {loadingMore ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <ChevronDown className="h-4 w-4 mr-1" />} Load more
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+
+              <TabsContent value="removed" className="flex-1 min-h-0 mt-2">
+                <ScrollArea className="h-[250px] rounded-md border">
+                  <div className="p-3 space-y-1">
+                    {details.removedTokenGamingIds.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-8">No tokens were removed.</p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-muted-foreground mb-2">These users had expired/invalid FCM tokens that were cleaned up.</p>
+                        {details.removedTokenGamingIds.map((gid, i) => (
+                          <div key={`${gid}-${i}`} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50">
+                            <span className="text-sm font-mono">{gid}</span>
+                            <Badge variant="destructive" className="text-xs"><ShieldX className="h-3 w-3 mr-1" />Removed</Badge>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+            </Tabs>
+          </div>
+        ) : <p className="text-muted-foreground text-center py-8">Failed to load details.</p>}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+export default function NotificationList({ initialNotifications, initialHasMore, totalNotifications, initialBroadcasts, initialBroadcastHasMore, totalBroadcasts, initialTab }: NotificationListProps) {
   const [notifications, setNotifications] = useState(initialNotifications);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(initialHasMore);
+  const [broadcasts, setBroadcasts] = useState(initialBroadcasts);
+  const [broadcastPage, setBroadcastPage] = useState(1);
+  const [broadcastHasMore, setBroadcastHasMore] = useState(initialBroadcastHasMore);
+  const [detailsBroadcastId, setDetailsBroadcastId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const { toast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-
   const search = searchParams.get('search') || '';
   const sort = searchParams.get('sort') || 'desc';
+  const activeTab = searchParams.get('tab') || 'broadcasts';
 
-  useEffect(() => {
-    setNotifications(initialNotifications);
-    setHasMore(initialHasMore);
-    setPage(1);
-  }, [initialNotifications, initialHasMore]);
+  useEffect(() => { setNotifications(initialNotifications); setHasMore(initialHasMore); setPage(1); }, [initialNotifications, initialHasMore]);
+  useEffect(() => { setBroadcasts(initialBroadcasts); setBroadcastHasMore(initialBroadcastHasMore); setBroadcastPage(1); }, [initialBroadcasts, initialBroadcastHasMore]);
 
-  const handleLoadMore = async () => {
-    startTransition(async () => {
-      const nextPage = page + 1;
-      const { notifications: newNotifications, hasMore: newHasMore } = await getNotifications(nextPage, search, sort);
-      setNotifications(prev => [...prev, ...newNotifications]);
-      setHasMore(newHasMore);
-      setPage(nextPage);
-    });
-  };
-  
-  const handleSortToggle = () => {
-    const newSort = sort === 'desc' ? 'asc' : 'desc';
-    const params = new URLSearchParams(searchParams);
-    params.set('sort', newSort);
-    router.push(`${pathname}?${params.toString()}`);
-  };
-
-  const handleSearch = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const searchQuery = formData.get('search') as string;
-    const params = new URLSearchParams(searchParams);
-    params.set('search', searchQuery);
-    params.delete('page');
-    router.push(`${pathname}?${params.toString()}`);
-  };
-
-  const handleDelete = (notificationId: string) => {
-    startTransition(async () => {
-      const result = await deleteNotification(notificationId);
-      if (result.success) {
-        setNotifications(prev => prev.filter(n => n._id.toString() !== notificationId));
-        toast({ title: 'Success', description: result.message });
-      } else {
-        toast({ variant: 'destructive', title: 'Error', description: result.message });
-      }
-    });
-  };
+  const handleLoadMore = () => startTransition(async () => { const np = page + 1; const r = await getNotifications(np, search, sort); setNotifications(p => [...p, ...r.notifications]); setHasMore(r.hasMore); setPage(np); });
+  const handleBroadcastLoadMore = () => startTransition(async () => { const np = broadcastPage + 1; const r = await getBroadcastNotifications(np, sort); setBroadcasts(p => [...p, ...r.broadcasts]); setBroadcastHasMore(r.hasMore); setBroadcastPage(np); });
+  const handleSortToggle = () => { const p = new URLSearchParams(searchParams); p.set('sort', sort === 'desc' ? 'asc' : 'desc'); router.push(`${pathname}?${p.toString()}`); };
+  const handleSearch = (e: React.FormEvent<HTMLFormElement>) => { e.preventDefault(); const p = new URLSearchParams(searchParams); p.set('search', new FormData(e.currentTarget).get('search') as string); p.delete('page'); router.push(`${pathname}?${p.toString()}`); };
+  const handleTabChange = (v: string) => { const p = new URLSearchParams(searchParams); p.set('tab', v); router.push(`${pathname}?${p.toString()}`); };
+  const handleDelete = (id: string) => startTransition(async () => { const r = await deleteNotification(id); if (r.success) { setNotifications(p => p.filter(n => n._id.toString() !== id)); toast({ title: 'Success', description: r.message }); } else toast({ variant: 'destructive', title: 'Error', description: r.message }); });
+  const handleDeleteBroadcast = (id: string) => startTransition(async () => { const r = await deleteBroadcastNotification(id); if (r.success) { setBroadcasts(p => p.filter(b => b._id.toString() !== id)); toast({ title: 'Success', description: r.message }); } else toast({ variant: 'destructive', title: 'Error', description: r.message }); });
+  const handleBroadcastComplete = useCallback((id: string) => { setBroadcasts(p => p.map(b => b._id.toString() === id ? { ...b, status: 'completed' as const } : b)); router.refresh(); }, [router]);
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="flex items-center gap-2">
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <CardTitle>Users Notification</CardTitle>
-            <Badge variant="secondary">{totalNotifications}</Badge>
+            <Button variant="outline" onClick={handleSortToggle}><ArrowUpDown className="mr-2 h-4 w-4" />{sort === 'desc' ? 'Newest First' : 'Oldest First'}</Button>
           </div>
-          <div className="flex items-center gap-2">
-             <form onSubmit={handleSearch} className="flex items-center gap-2">
-                <Input name="search" placeholder="Search by Gaming ID..." defaultValue={search} className="w-56"/>
-                <Button type="submit" variant="outline" size="icon"><Search className="h-4 w-4" /></Button>
-            </form>
-            <Button variant="outline" onClick={handleSortToggle}>
-                <ArrowUpDown className="mr-2 h-4 w-4" />
-                {sort === 'desc' ? 'Newest First' : 'Oldest First'}
-            </Button>
-          </div>
-        </div>
-        <CardDescription>
-          A list of all notifications sent to users.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {notifications.length === 0 ? (
-          <p className="text-muted-foreground text-center py-8">No notifications found.</p>
-        ) : (
-          <div className="space-y-4">
-            {notifications.map((notification) => (
-              <Card key={notification._id.toString()} className="flex flex-col">
-                <CardHeader className="flex flex-row justify-between items-start pb-2">
-                  <div>
-                    <CardTitle className="text-base font-mono">{notification.gamingId}</CardTitle>
-                    <CardDescription><FormattedDate dateString={notification.createdAt as unknown as string} /></CardDescription>
-                  </div>
-                  <Badge variant={notification.isRead ? "secondary" : "default"}>
-                    {notification.isRead ? "Read" : "Unread"}
-                  </Badge>
-                </CardHeader>
-                <CardContent>
-                  <ClickableMessage message={notification.message} />
-                   {notification.imageUrl && (
-                    <div className="mt-4 relative aspect-video w-full max-w-sm rounded-md overflow-hidden">
-                        <NotificationMedia src={notification.imageUrl} alt="Notification media" />
-                    </div>
-                   )}
-                </CardContent>
-                <CardFooter className="flex justify-end bg-muted/40 p-2">
-                  <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                           <Button variant="destructive" size="icon" disabled={isPending}>
-                              <Trash2 className="h-4 w-4"/>
-                           </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                          <AlertDialogHeader>
-                              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                              <AlertDialogDescription>This will permanently delete this notification. This action cannot be undone.</AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => handleDelete(notification._id.toString())}>Delete</AlertDialogAction>
-                          </AlertDialogFooter>
-                      </AlertDialogContent>
-                  </AlertDialog>
-                </CardFooter>
-              </Card>
-            ))}
-          </div>
-        )}
-      </CardContent>
-       {hasMore && (
-        <CardFooter className="justify-center">
-            <Button onClick={handleLoadMore} disabled={isPending}>
-                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Load More
-            </Button>
-        </CardFooter>
-      )}
-    </Card>
+          <CardDescription>Manage broadcast and individual notifications sent to users.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Tabs value={activeTab} onValueChange={handleTabChange}>
+            <TabsList className="grid w-full grid-cols-2 mb-4">
+              <TabsTrigger value="broadcasts" className="flex items-center gap-2"><Megaphone className="h-4 w-4" />Broadcasts<Badge variant="secondary" className="ml-1">{totalBroadcasts}</Badge></TabsTrigger>
+              <TabsTrigger value="individual" className="flex items-center gap-2"><Users className="h-4 w-4" />Individual<Badge variant="secondary" className="ml-1">{totalNotifications}</Badge></TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="broadcasts" className="space-y-4">
+              {broadcasts.length === 0 ? <p className="text-muted-foreground text-center py-8">No broadcast notifications found.</p> : (
+                <div className="space-y-4">
+                  {broadcasts.map(b => (
+                    <Card key={b._id.toString()} className="flex flex-col border-l-4 border-l-blue-500">
+                      <CardHeader className="flex flex-row justify-between items-start pb-2">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2"><Megaphone className="h-4 w-4 text-blue-500" /><CardTitle className="text-base">Sent to All Users</CardTitle><StatusBadge status={b.status} /></div>
+                          <CardDescription><FormattedDate dateString={b.createdAt as unknown as string} /></CardDescription>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <ClickableMessage message={b.message} />
+                        {b.imageUrl && <div className="mt-2 relative aspect-video w-full max-w-sm rounded-md overflow-hidden"><NotificationMedia src={b.imageUrl} alt="Broadcast media" /></div>}
+                        <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground pt-2 border-t">
+                          <span className="flex items-center gap-1"><Users className="h-3.5 w-3.5" />{b.totalUsers} users</span>
+                          {b.status === 'completed' && <><span className="flex items-center gap-1 text-green-600"><CheckCircle2 className="h-3.5 w-3.5" />{b.pushSent} push sent</span>{b.pushFailed > 0 && <span className="flex items-center gap-1 text-red-500"><XCircle className="h-3.5 w-3.5" />{b.pushFailed} failed</span>}</>}
+                          {b.isPopup && <Badge variant="outline" className="text-xs">Popup</Badge>}
+                        </div>
+                        {b.status === 'sending' && <BroadcastInlineProgress broadcastId={b._id.toString()} onComplete={() => handleBroadcastComplete(b._id.toString())} />}
+                      </CardContent>
+                      <CardFooter className="flex justify-end gap-2 bg-muted/40 p-2">
+                        {b.status === 'completed' && <Button variant="outline" size="sm" onClick={() => setDetailsBroadcastId(b._id.toString())}><Info className="h-4 w-4 mr-1" /> More Details</Button>}
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild><Button variant="destructive" size="sm" disabled={isPending}><Trash2 className="h-4 w-4 mr-1" /> Delete from all accounts</Button></AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader><AlertDialogTitle>Delete this broadcast?</AlertDialogTitle><AlertDialogDescription>This will permanently delete this broadcast from <strong>every user's account</strong> ({b.totalUsers} users). Cannot be undone.</AlertDialogDescription></AlertDialogHeader>
+                            <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDeleteBroadcast(b._id.toString())}>Yes, Delete from All</AlertDialogAction></AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </CardFooter>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              {broadcastHasMore && <div className="flex justify-center pt-4"><Button onClick={handleBroadcastLoadMore} disabled={isPending}>{isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Load More</Button></div>}
+            </TabsContent>
+
+            <TabsContent value="individual" className="space-y-4">
+              <form onSubmit={handleSearch} className="flex items-center gap-2 mb-4"><Input name="search" placeholder="Search by Gaming ID..." defaultValue={search} className="w-56" /><Button type="submit" variant="outline" size="icon"><Search className="h-4 w-4" /></Button></form>
+              {notifications.length === 0 ? <p className="text-muted-foreground text-center py-8">No individual notifications found.</p> : (
+                <div className="space-y-4">
+                  {notifications.map(n => (
+                    <Card key={n._id.toString()} className="flex flex-col">
+                      <CardHeader className="flex flex-row justify-between items-start pb-2">
+                        <div><CardTitle className="text-base font-mono">{n.gamingId}</CardTitle><CardDescription><FormattedDate dateString={n.createdAt as unknown as string} /></CardDescription></div>
+                        <Badge variant={n.isRead ? "secondary" : "default"}>{n.isRead ? "Read" : "Unread"}</Badge>
+                      </CardHeader>
+                      <CardContent>
+                        <ClickableMessage message={n.message} />
+                        {n.imageUrl && <div className="mt-4 relative aspect-video w-full max-w-sm rounded-md overflow-hidden"><NotificationMedia src={n.imageUrl} alt="Notification media" /></div>}
+                      </CardContent>
+                      <CardFooter className="flex justify-end bg-muted/40 p-2">
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild><Button variant="destructive" size="icon" disabled={isPending}><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader><AlertDialogTitle>Are you sure?</AlertDialogTitle><AlertDialogDescription>This will permanently delete this notification.</AlertDialogDescription></AlertDialogHeader>
+                            <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDelete(n._id.toString())}>Delete</AlertDialogAction></AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </CardFooter>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              {hasMore && <div className="flex justify-center pt-4"><Button onClick={handleLoadMore} disabled={isPending}>{isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Load More</Button></div>}
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
+      <BroadcastDetailsDialog broadcastId={detailsBroadcastId || ''} isOpen={!!detailsBroadcastId} onClose={() => setDetailsBroadcastId(null)} />
+    </>
   );
 }
