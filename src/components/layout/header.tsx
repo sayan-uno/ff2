@@ -41,7 +41,9 @@ export default function Header({ user, notifications, notificationKey, onNotific
         title: "Logged Out",
         description: "You have been successfully logged out.",
       });
-      window.location.reload();
+      // After a successful logout, send the user to the home page (full navigation
+      // so server state is refreshed just like the previous reload behavior).
+      window.location.href = '/';
     } else {
       toast({
         variant: "destructive",
