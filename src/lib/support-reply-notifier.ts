@@ -21,11 +21,14 @@ import { sendPushNotification } from '@/lib/push-notifications';
  * @param db        The already-connected database.
  * @param gamingId  The gaming ID of the user who opened the report.
  * @param subject   The report's subject, e.g. "Support Report 1".
+ * @param ticketId  The report id, stored on the notification so it can be
+ *                  deleted from the bell once the user has seen the reply.
  */
 export async function notifyUserOfSupportReply(
   db: MongoDbWithClient,
   gamingId: string,
-  subject: string
+  subject: string,
+  ticketId: string
 ): Promise<void> {
   try {
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002';
@@ -38,6 +41,9 @@ export async function notifyUserOfSupportReply(
       message: websiteMessage,
       isRead: false,
       createdAt: new Date(),
+      // Tag so it can be removed from the bell the moment the user sees the reply.
+      type: 'support_reply',
+      supportTicketId: ticketId,
     };
     await db.collection<Notification>('notifications').insertOne(newNotification as Notification);
 

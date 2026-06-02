@@ -120,6 +120,11 @@ export interface Notification {
     isPopup?: boolean;
     broadcastId?: string; // Links to a BroadcastNotification if this was part of a broadcast
     pushDelivered?: boolean; // True if Firebase push notification was successfully sent
+    // Tagging for support-reply notifications so they can be precisely removed
+    // from the bell once the user has actually seen the reply (keeps the bell
+    // history from piling up). Absent on all other notification kinds.
+    type?: string;            // e.g. 'support_reply'
+    supportTicketId?: string; // The report this reply notification belongs to
 }
 
 export interface BroadcastNotification {

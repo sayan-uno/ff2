@@ -239,21 +239,35 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
     }
   }, [activeTicket?.messages.length, view, scrollToBottom]);
 
-  // Poll the open ticket every 5s so admin replies appear automatically.
+  // Poll the open ticket every 2s so admin replies appear (and are marked seen)
+  // quickly — fast enough that an actively-watching user reliably registers a
+  // "seen" before the server's 3-second notification check fires.
+  //
+  // Crucially we SKIP the poll while the tab is hidden (browser minimised, phone
+  // locked, switched apps) and swallow network errors. In all those cases the
+  // read receipt deliberately stays stale, so the user is treated as "not
+  // present" and the unseen-reply notification is allowed to fire.
   useEffect(() => {
     if (view === 'chat' && activeTicket) {
       const ticketId = activeTicket._id.toString();
       pollRef.current = setInterval(async () => {
         if (sendingRef.current) return; // don't clobber an in-flight send
-        const fresh = await getMyTicket(ticketId);
-        if (sendingRef.current) return; // a send started while we were fetching
-        if (fresh) {
-          setActiveTicket(fresh);
-          if (fresh.userUnread > 0) {
-            markTicketReadByUser(ticketId);
+        // Hidden tab → not genuinely "seeing" the chat; let the notification fire.
+        if (typeof document !== 'undefined' && document.hidden) return;
+        try {
+          const fresh = await getMyTicket(ticketId);
+          if (sendingRef.current) return; // a send started while we were fetching
+          if (typeof document !== 'undefined' && document.hidden) return;
+          if (fresh) {
+            setActiveTicket(fresh);
+            if (fresh.userUnread > 0) {
+              await markTicketReadByUser(ticketId);
+            }
           }
+        } catch {
+          /* offline / fetch failed — keep read receipt stale so user gets notified */
         }
-      }, 5000);
+      }, 2000);
     }
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -598,6 +612,17 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
   // CHAT VIEW (WhatsApp-style)
   // -------------------------------------------------------------------------
   if (view === 'chat' && activeTicket) {
+    // A user's own message counts as "seen" only once the support team has
+    // replied AFTER it (i.e. there is an admin message later in the thread).
+    // The admin merely opening/reading the chat does NOT mark it seen — this is
+    // intentional so support can read & verify without committing to a reply.
+    const lastAdminIdx = (() => {
+      const msgs = activeTicket.messages;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].sender === 'admin') return i;
+      }
+      return -1;
+    })();
     return (
       // Full-screen overlay: covers the site header & footer so the chat
       // behaves like a real messaging app and only the messages scroll.
@@ -673,7 +698,14 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                         )}
                         <span className="float-right ml-2 mt-1 text-[10px] text-gray-500 flex items-center gap-0.5">
                           <MessageTime date={msg.createdAt as any} />
-                          {isUser && <CheckCheck className="h-3 w-3 text-[#34B7F1]" />}
+                          {isUser &&
+                            (lastAdminIdx > idx ? (
+                              // Support replied after this message → seen.
+                              <CheckCheck className="h-3 w-3 text-[#34B7F1]" />
+                            ) : (
+                              // Delivered, but not yet replied to → grey double tick.
+                              <CheckCheck className="h-3 w-3 text-gray-400" />
+                            ))}
                         </span>
                       </div>
                     </div>

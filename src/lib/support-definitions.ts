@@ -38,6 +38,11 @@ export interface SupportTicket {
     lastSenderRole: 'user' | 'admin'; // Who sent the latest message
     userUnread: number;          // Number of admin messages the user hasn't seen yet
     adminUnread: number;         // Number of user messages the admin hasn't seen yet
+    // The last time the report owner genuinely viewed the chat (tab open & online).
+    // Drives the real "seen" read-receipt for admin replies AND the 3-second
+    // rule that decides whether to push a reply notification. NOT set when the
+    // admin merely opens the ticket — admin read receipts are derived from replies.
+    userLastReadAt?: Date;
     createdAt: Date;
     updatedAt: Date;             // Bumped whenever a new message is added
 }

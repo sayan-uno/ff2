@@ -615,7 +615,16 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                               {msg.text && <span className="whitespace-pre-wrap break-words">{msg.text}</span>}
                               <span className="float-right ml-2 mt-1 text-[10px] text-gray-500 flex items-center gap-0.5">
                                 <MessageTime date={msg.createdAt as any} />
-                                {isAdmin && <CheckCheck className="h-3 w-3 text-[#34B7F1]" />}
+                                {isAdmin &&
+                                  (activeTicket.userLastReadAt &&
+                                  new Date(activeTicket.userLastReadAt).getTime() >=
+                                    new Date(msg.createdAt as any).getTime() ? (
+                                    // The user genuinely viewed the chat after this reply → seen.
+                                    <CheckCheck className="h-3 w-3 text-[#34B7F1]" />
+                                  ) : (
+                                    // Delivered, but the user hasn't opened it yet → grey double tick.
+                                    <CheckCheck className="h-3 w-3 text-gray-400" />
+                                  ))}
                               </span>
                             </div>
                           </div>

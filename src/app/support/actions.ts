@@ -1,13 +1,14 @@
 'use server';
 
 import { cookies } from 'next/headers';
+import { after } from 'next/server';
 import { ObjectId } from 'mongodb';
 import { unstable_noStore as noStore } from 'next/cache';
 import { revalidatePath } from 'next/cache';
 import { connectToDatabase } from '@/lib/mongodb';
 import { isAdminAuthenticated } from '@/app/actions';
 import type { SupportTicket, SupportMessage, SupportImage } from '@/lib/support-definitions';
-import type { User } from '@/lib/definitions';
+import type { User, Notification } from '@/lib/definitions';
 import { notifyUserOfSupportReply } from '@/lib/support-reply-notifier';
 
 const COLLECTION = 'support_tickets';
@@ -258,6 +259,11 @@ export async function sendUserMessage(
 }
 
 // Mark all admin replies in a ticket as read by the user.
+// `userLastReadAt` is stamped to "now" — this is the user's genuine presence
+// signal. The user client only calls this while the chat tab is open AND
+// visible (and the call only succeeds while online), so the timestamp staying
+// fresh means the user is actually looking at the chat. The admin's "seen"
+// read-receipt and the 3-second reply-notification rule both rely on it.
 export async function markTicketReadByUser(ticketId: string): Promise<{ success: boolean }> {
     const gamingId = getCurrentGamingId();
     if (!gamingId || !ObjectId.isValid(ticketId)) {
@@ -267,9 +273,67 @@ export async function markTicketReadByUser(ticketId: string): Promise<{ success:
     const db = await connectToDatabase();
     await db.collection<SupportTicket>(COLLECTION).updateOne(
         { _id: new ObjectId(ticketId), gamingId },
-        { $set: { userUnread: 0 } }
+        { $set: { userUnread: 0, userLastReadAt: new Date() } }
     );
+
+    // The user has now genuinely seen this report's replies, so clear any
+    // reply notifications we left in their bell for THIS ticket — this keeps the
+    // bell history from piling up when they repeatedly leave/re-open the chat.
+    // Scoped tightly to this user + ticket + the support_reply tag so no other
+    // notification kind (orders, gifts, broadcasts, …) is ever touched.
+    await db.collection<Notification>('notifications').deleteMany({
+        gamingId,
+        type: 'support_reply',
+        supportTicketId: ticketId,
+    });
+
     return { success: true };
+}
+
+// Three seconds after an admin reply, decide whether the report owner needs a
+// notification. We deliberately do NOT notify at send time: if the user is
+// actively viewing the chat their client will have marked the reply read within
+// this window (fast poll), so we stay quiet. If the user never saw it — they
+// never opened the chat, minimised the browser, or lost connection — the read
+// timestamp stays stale and we send the website + FCM notification.
+//
+// Runs via `after()` so it executes on the server *after* the admin's response
+// is returned (the reply itself is never delayed).
+function scheduleUnseenReplyNotification(ticketId: string, replyAt: Date): void {
+    after(async () => {
+        try {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+
+            const db = await connectToDatabase();
+            const ticket = await db.collection<SupportTicket>(COLLECTION).findOne(
+                { _id: new ObjectId(ticketId) },
+                { projection: { gamingId: 1, subject: 1, userLastReadAt: 1, lastSenderRole: 1, messages: { $slice: -1 } } }
+            );
+            if (!ticket) return;
+
+            // Only notify if this admin reply is STILL the latest message. If the
+            // admin sent another message, or the user already replied, that later
+            // event owns the decision — this avoids duplicate notifications.
+            const last = ticket.messages?.[ticket.messages.length - 1];
+            const isStillLatestReply =
+                ticket.lastSenderRole === 'admin' &&
+                !!last &&
+                last.sender === 'admin' &&
+                new Date(last.createdAt).getTime() === replyAt.getTime();
+            if (!isStillLatestReply) return;
+
+            // Seen in time → stay silent. This is what protects the user from
+            // getting pinged for a message they were already reading.
+            const seen =
+                !!ticket.userLastReadAt &&
+                new Date(ticket.userLastReadAt).getTime() >= replyAt.getTime();
+            if (seen) return;
+
+            await notifyUserOfSupportReply(db, ticket.gamingId, ticket.subject, ticketId);
+        } catch (error) {
+            console.error('Support: deferred reply notification failed', error);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -473,18 +537,19 @@ export async function sendAdminReply(
 
     try {
         const db = await connectToDatabase();
+        const now = new Date();
         const newMessage: SupportMessage = {
             _id: new ObjectId(),
             sender: 'admin',
             text: cleanText,
-            createdAt: new Date(),
+            createdAt: now,
         };
 
         const result = await db.collection<SupportTicket>(COLLECTION).updateOne(
             { _id: new ObjectId(ticketId) },
             {
                 $push: { messages: newMessage },
-                $set: { lastSenderRole: 'admin', updatedAt: new Date() },
+                $set: { lastSenderRole: 'admin', updatedAt: now },
                 $inc: { userUnread: 1 },
             }
         );
@@ -493,14 +558,9 @@ export async function sendAdminReply(
             return { success: false, message: 'Report not found.' };
         }
 
-        // Let the report owner know the support team replied (website bell + FCM).
-        const ticket = await db.collection<SupportTicket>(COLLECTION).findOne(
-            { _id: new ObjectId(ticketId) },
-            { projection: { gamingId: 1, subject: 1 } }
-        );
-        if (ticket) {
-            await notifyUserOfSupportReply(db, ticket.gamingId, ticket.subject);
-        }
+        // Notify the report owner only if they haven't seen this reply within 3s
+        // (website bell + FCM). Deferred so an actively-watching user stays unpinged.
+        scheduleUnseenReplyNotification(ticketId, now);
 
         return { success: true, message: 'Reply sent.' };
     } catch (error) {
@@ -576,19 +636,20 @@ export async function sendAdminImageMessage(
 
     try {
         const db = await connectToDatabase();
+        const now = new Date();
         const newMessage: SupportMessage = {
             _id: new ObjectId(),
             sender: 'admin',
             text: cleanCaption,
             imageIds: validIds,
-            createdAt: new Date(),
+            createdAt: now,
         };
 
         const result = await db.collection<SupportTicket>(COLLECTION).updateOne(
             { _id: new ObjectId(ticketId) },
             {
                 $push: { messages: newMessage },
-                $set: { lastSenderRole: 'admin', updatedAt: new Date() },
+                $set: { lastSenderRole: 'admin', updatedAt: now },
                 $inc: { userUnread: 1 },
             }
         );
@@ -597,14 +658,9 @@ export async function sendAdminImageMessage(
             return { success: false, message: 'Report not found.' };
         }
 
-        // Let the report owner know the support team replied (website bell + FCM).
-        const ticket = await db.collection<SupportTicket>(COLLECTION).findOne(
-            { _id: new ObjectId(ticketId) },
-            { projection: { gamingId: 1, subject: 1 } }
-        );
-        if (ticket) {
-            await notifyUserOfSupportReply(db, ticket.gamingId, ticket.subject);
-        }
+        // Notify the report owner only if they haven't seen this reply within 3s
+        // (website bell + FCM). Deferred so an actively-watching user stays unpinged.
+        scheduleUnseenReplyNotification(ticketId, now);
 
         return { success: true, message: 'Sent.' };
     } catch (error) {
