@@ -8,6 +8,7 @@ import { connectToDatabase } from '@/lib/mongodb';
 import { isAdminAuthenticated } from '@/app/actions';
 import type { SupportTicket, SupportMessage, SupportImage } from '@/lib/support-definitions';
 import type { User } from '@/lib/definitions';
+import { notifyUserOfSupportReply } from '@/lib/support-reply-notifier';
 
 const COLLECTION = 'support_tickets';
 const IMAGE_COLLECTION = 'support_images';
@@ -492,6 +493,15 @@ export async function sendAdminReply(
             return { success: false, message: 'Report not found.' };
         }
 
+        // Let the report owner know the support team replied (website bell + FCM).
+        const ticket = await db.collection<SupportTicket>(COLLECTION).findOne(
+            { _id: new ObjectId(ticketId) },
+            { projection: { gamingId: 1, subject: 1 } }
+        );
+        if (ticket) {
+            await notifyUserOfSupportReply(db, ticket.gamingId, ticket.subject);
+        }
+
         return { success: true, message: 'Reply sent.' };
     } catch (error) {
         console.error('Support: failed to send admin reply', error);
@@ -585,6 +595,15 @@ export async function sendAdminImageMessage(
 
         if (result.matchedCount === 0) {
             return { success: false, message: 'Report not found.' };
+        }
+
+        // Let the report owner know the support team replied (website bell + FCM).
+        const ticket = await db.collection<SupportTicket>(COLLECTION).findOne(
+            { _id: new ObjectId(ticketId) },
+            { projection: { gamingId: 1, subject: 1 } }
+        );
+        if (ticket) {
+            await notifyUserOfSupportReply(db, ticket.gamingId, ticket.subject);
         }
 
         return { success: true, message: 'Sent.' };

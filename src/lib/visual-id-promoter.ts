@@ -4,6 +4,7 @@
 
 import { connectToDatabase } from '@/lib/mongodb';
 import { type User, type Order, type Notification, type AiLog, type UserProductControl, type VisualIdPromotionLog, PreSeededLoginHistory } from '@/lib/definitions';
+import { migrateSupportDataToPromotedId } from '@/lib/support-id-promoter';
 import { ObjectId } from 'mongodb';
 
 /**
@@ -48,7 +49,10 @@ export async function promoteVisualId(user: User): Promise<void> {
       await db.collection<Notification>('notifications').updateMany({ gamingId: oldGamingId }, { $set: { gamingId: newGamingId } }, { session });
       await db.collection<AiLog>('ai_logs').updateMany({ gamingId: oldGamingId }, { $set: { gamingId: newGamingId } }, { session });
       await db.collection<UserProductControl>('user_product_controls').updateMany({ gamingId: oldGamingId }, { $set: { gamingId: newGamingId } }, { session });
-      
+
+      // 2b. Migrate the user's support reports, their images and any support block.
+      await migrateSupportDataToPromotedId(db, session, oldGamingId, newGamingId);
+
       // 3. Pre-seed login history for the old ID that is about to be deleted
       const historySeed: Omit<PreSeededLoginHistory, '_id'> = {
           gamingIdToSeed: oldGamingId,
