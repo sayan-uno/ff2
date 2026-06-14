@@ -342,6 +342,7 @@ export async function acceptRefundRequest(
 
         const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002';
         const statusUrl = `${baseUrl}/refundstatus`;
+        const supportUrl = `${baseUrl}/support`;
 
         const productLines = orders
             .map((o) => `• ${o.productName} (₹${o.finalPrice ?? o.productPrice ?? 0})`)
@@ -371,7 +372,8 @@ It will be completed within ${REFUND_WINDOW_DAYS} days. You can track the live p
         );
 
         // 2. Website notification — the bell auto-linkifies the URL.
-        const notifMessage = `🎉 Good news! Your refund request was accepted and is now in progress. It will be completed within ${REFUND_WINDOW_DAYS} days. Track it here: ${statusUrl}`;
+        const notifMessage = `🎉 Good news! Your refund request was accepted and is now in progress. It will be completed within ${REFUND_WINDOW_DAYS} days. Track it here: ${statusUrl}
+Need help? Reach us on the support page: ${supportUrl}`;
         const newNotification: Omit<Notification, '_id'> = {
             gamingId,
             message: notifMessage,
