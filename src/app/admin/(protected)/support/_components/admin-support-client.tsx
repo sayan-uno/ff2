@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import {
   DropdownMenu,
@@ -22,6 +24,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import {
   Send,
@@ -39,6 +42,7 @@ import {
   Ban,
   ShieldCheck,
   BadgeCheck,
+  Copy,
 } from 'lucide-react';
 import AcceptRefundDialog from './accept-refund-dialog';
 import {
@@ -50,6 +54,7 @@ import {
   uploadAdminImage,
   sendAdminImageMessage,
   deleteTicket,
+  deleteTickets,
   blockSupportUser,
   unblockSupportUser,
   getSupportBlockStatus,
@@ -107,6 +112,16 @@ function fileToDataUri(file: File): Promise<string> {
 
 interface Props {
   initialTickets: SupportTicket[];
+}
+
+// India Standard Time is a fixed UTC+05:30 offset. The datetime-local pickers
+// give a wall-clock value with no timezone; the admin enters it in IST, so we
+// pin the IST offset to get the correct UTC instant for comparison.
+function istLocalToMs(local: string): number | null {
+  if (!local) return null;
+  const withSeconds = local.length === 16 ? `${local}:00` : local;
+  const t = new Date(`${withSeconds}+05:30`).getTime();
+  return isNaN(t) ? null : t;
 }
 
 // WhatsApp-style album of one or more images inside a chat bubble.
@@ -184,6 +199,10 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const [reply, setReply] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [search, setSearch] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [stagedImages, setStagedImages] = useState<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
@@ -415,17 +434,86 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     refreshList();
   };
 
+  const startMs = istLocalToMs(fromDate);
+  const endMs = istLocalToMs(toDate);
+  const hasFilter = Boolean(search || fromDate || toDate);
+
   const filtered = tickets.filter((t) => {
     const q = search.toLowerCase();
-    return (
+    const matchesSearch =
       !q ||
       t.subject.toLowerCase().includes(q) ||
       t.gamingId.toLowerCase().includes(q) ||
-      (t.visualGamingId || '').toLowerCase().includes(q)
-    );
+      (t.visualGamingId || '').toLowerCase().includes(q);
+    if (!matchesSearch) return false;
+
+    // Time frame filters on when the report was created (IST).
+    if (startMs !== null || endMs !== null) {
+      const created = new Date(t.createdAt as unknown as string).getTime();
+      if (startMs !== null && created < startMs) return false;
+      if (endMs !== null && created > endMs) return false;
+    }
+    return true;
   });
 
   const totalUnread = tickets.reduce((sum, t) => sum + (t.adminUnread || 0), 0);
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((t) => selectedIds.has(t._id.toString()));
+
+  const toggleSelectAll = (checked: boolean) => {
+    if (checked) setSelectedIds(new Set(filtered.map((t) => t._id.toString())));
+    else setSelectedIds(new Set());
+  };
+
+  const toggleSelectOne = (id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const clearFilters = () => {
+    setSearch('');
+    setFromDate('');
+    setToDate('');
+  };
+
+  const handleBulkCopy = async () => {
+    // Copy the Gaming IDs of the selected reports, in the order shown.
+    const ids = filtered
+      .filter((t) => selectedIds.has(t._id.toString()))
+      .map((t) => t.gamingId);
+    if (ids.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(ids.join(','));
+      toast({ title: 'Copied', description: `Copied ${ids.length} Gaming ID(s) to clipboard.` });
+    } catch {
+      toast({ variant: 'destructive', title: 'Error', description: 'Could not access the clipboard.' });
+    }
+  };
+
+  const deleteManyTickets = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    const result = await deleteTickets(ids);
+    setIsBulkDeleting(false);
+    if (result.success) {
+      toast({ title: 'Deleted', description: result.message });
+      const idSet = new Set(ids);
+      setTickets((prev) => prev.filter((t) => !idSet.has(t._id.toString())));
+      // If the open report was deleted, close the conversation pane.
+      if (activeId && idSet.has(activeId)) {
+        setActiveId(null);
+        setActiveTicket(null);
+      }
+      setSelectedIds(new Set());
+      refreshList();
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: result.message });
+    }
+  };
 
   return (
     <div>
@@ -445,7 +533,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
         <div className="grid grid-cols-1 md:grid-cols-[340px_1fr] h-[75vh] min-h-0">
           {/* Ticket list */}
           <div className={`border-r flex-col min-h-0 overflow-hidden ${activeId ? 'hidden md:flex' : 'flex'}`}>
-            <div className="p-3 border-b">
+            <div className="p-3 border-b space-y-2">
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -455,6 +543,97 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                   className="pl-8"
                 />
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label htmlFor="support-from" className="text-[11px] text-muted-foreground">From (IST)</Label>
+                  <Input id="support-from" type="datetime-local" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="h-9 text-xs" />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="support-to" className="text-[11px] text-muted-foreground">To (IST)</Label>
+                  <Input id="support-to" type="datetime-local" value={toDate} onChange={(e) => setToDate(e.target.value)} className="h-9 text-xs" />
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="support-select-all"
+                    checked={allFilteredSelected}
+                    onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
+                  />
+                  <Label htmlFor="support-select-all" className="cursor-pointer text-xs">
+                    Select all{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+                  </Label>
+                </div>
+                {hasFilter && (
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={clearFilters}>
+                    <X className="h-3.5 w-3.5 mr-1" /> Clear
+                  </Button>
+                )}
+              </div>
+              {(selectedIds.size > 0 || hasFilter) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedIds.size > 0 && (
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleBulkCopy}>
+                      <Copy className="h-3.5 w-3.5 mr-1" /> Bulk Copy ({selectedIds.size})
+                    </Button>
+                  )}
+                  {selectedIds.size > 0 && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="destructive" size="sm" className="h-8 text-xs" disabled={isBulkDeleting}>
+                          {isBulkDeleting ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Trash2 className="h-3.5 w-3.5 mr-1" />}
+                          Delete ({selectedIds.size})
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete selected reports?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This permanently deletes the {selectedIds.size} selected report(s) and their images. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={(e) => { e.preventDefault(); deleteManyTickets(Array.from(selectedIds)); }}
+                          >
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                  {hasFilter && filtered.length > 0 && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="destructive" size="sm" className="h-8 text-xs" disabled={isBulkDeleting}>
+                          {isBulkDeleting ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Trash2 className="h-3.5 w-3.5 mr-1" />}
+                          Delete All in Filter ({filtered.length})
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete all {filtered.length} reports in this filter?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This permanently deletes every report matching your current filter
+                            {fromDate || toDate ? ' (the selected IST time frame)' : ''} and their images. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={(e) => { e.preventDefault(); deleteManyTickets(filtered.map((t) => t._id.toString())); }}
+                          >
+                            Delete All
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
               {filtered.length === 0 ? (
@@ -464,12 +643,20 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                   const id = ticket._id.toString();
                   const last = ticket.messages[ticket.messages.length - 1];
                   return (
-                    <button
+                    <div
                       key={id}
+                      className={`flex items-center gap-1 border-b ${activeId === id ? 'bg-muted' : ''}`}
+                    >
+                    <div className="pl-3" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedIds.has(id)}
+                        onCheckedChange={(checked) => toggleSelectOne(id, Boolean(checked))}
+                        aria-label="Select report"
+                      />
+                    </div>
+                    <button
                       onClick={() => openTicket(ticket)}
-                      className={`w-full text-left flex items-center gap-3 p-3 border-b hover:bg-muted/60 transition-colors ${
-                        activeId === id ? 'bg-muted' : ''
-                      }`}
+                      className="flex-1 min-w-0 text-left flex items-center gap-3 p-3 hover:bg-muted/60 transition-colors"
                     >
                       <div className="relative h-10 w-10 rounded-full bg-[#075E54] flex items-center justify-center overflow-hidden shrink-0">
                         <Image src="/img/garena.png" alt="" width={24} height={24} className="object-contain" />
@@ -495,6 +682,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                         </p>
                       </div>
                     </button>
+                    </div>
                   );
                 })
               )}

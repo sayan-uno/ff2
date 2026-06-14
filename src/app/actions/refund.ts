@@ -227,6 +227,30 @@ export interface AdminRefundListItem {
 
 const REFUNDS_PER_PAGE = 10;
 
+// India Standard Time is a fixed UTC+05:30 offset (no daylight saving). The
+// admin date/time pickers send a wall-clock value with no timezone (e.g.
+// "2026-06-14T15:30") entered in IST. We pin the IST offset here so it is
+// converted to the correct UTC instant before querying (acceptedAt is UTC).
+function istLocalToUtcDate(local?: string): Date | null {
+    if (!local) return null;
+    const withSeconds = local.length === 16 ? `${local}:00` : local;
+    const date = new Date(`${withSeconds}+05:30`);
+    return isNaN(date.getTime()) ? null : date;
+}
+
+// Builds the acceptedAt range filter shared by the listing and range-deletion
+// so that "what you see" and "what gets deleted" always match.
+function buildAcceptedAtFilter(from?: string, to?: string): Record<string, unknown> {
+    const filter: Record<string, unknown> = {};
+    const range: Record<string, Date> = {};
+    const start = istLocalToUtcDate(from);
+    const end = istLocalToUtcDate(to);
+    if (start) range.$gte = start;
+    if (end) range.$lte = end;
+    if (Object.keys(range).length > 0) filter.acceptedAt = range;
+    return filter;
+}
+
 // Paginated list of accepted refund requests for the admin section.
 //  - sort: 'desc' = newest first (default), 'asc' = oldest first.
 //  - from / to: optional ISO datetime range filter on acceptedAt.
@@ -244,19 +268,7 @@ export async function getAcceptedRefunds(params: {
     const page = Math.max(1, params.page ?? 1);
     const sortDir = params.sort === 'asc' ? 1 : -1;
 
-    const filter: Record<string, unknown> = {};
-    const acceptedAtFilter: Record<string, Date> = {};
-    if (params.from) {
-        const d = new Date(params.from);
-        if (!isNaN(d.getTime())) acceptedAtFilter.$gte = d;
-    }
-    if (params.to) {
-        const d = new Date(params.to);
-        if (!isNaN(d.getTime())) acceptedAtFilter.$lte = d;
-    }
-    if (Object.keys(acceptedAtFilter).length > 0) {
-        filter.acceptedAt = acceptedAtFilter;
-    }
+    const filter = buildAcceptedAtFilter(params.from, params.to);
 
     try {
         const db = await connectToDatabase();
@@ -350,6 +362,67 @@ export async function deleteRefundRequest(
     } catch (error) {
         console.error('Refund: failed to delete refund', error);
         return { success: false, message: 'Something went wrong. Please try again.' };
+    }
+}
+
+// Admin deletes several refund records at once by their _id. Used by the
+// "Delete Selected" action in the admin refund list.
+export async function deleteRefundRequests(
+    refundIds: string[]
+): Promise<{ success: boolean; message: string; deletedCount: number }> {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized.', deletedCount: 0 };
+
+    const objectIds = (refundIds || [])
+        .filter((id) => ObjectId.isValid(id))
+        .map((id) => new ObjectId(id));
+    if (objectIds.length === 0) {
+        return { success: false, message: 'No valid refunds selected.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db
+            .collection<RefundRequest>(REFUND_COLLECTION)
+            .deleteMany({ _id: { $in: objectIds } });
+        revalidatePath('/admin/refunds');
+        revalidatePath('/refundstatus');
+        revalidatePath('/order');
+        return { success: true, message: `Deleted ${result.deletedCount} refund(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Refund: failed to delete refunds', error);
+        return { success: false, message: 'Something went wrong. Please try again.', deletedCount: 0 };
+    }
+}
+
+// Admin deletes every accepted refund within the current IST time frame. Clears
+// the whole range, not just the loaded page.
+export async function deleteAcceptedRefundsInRange(params: {
+    from?: string;
+    to?: string;
+}): Promise<{ success: boolean; message: string; deletedCount: number }> {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized.', deletedCount: 0 };
+
+    const filter = buildAcceptedAtFilter(params.from, params.to);
+    // Guard against an accidental "delete everything": this action is only for
+    // deleting within a chosen time frame.
+    if (!filter.acceptedAt) {
+        return { success: false, message: 'Please choose a time frame first.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db
+            .collection<RefundRequest>(REFUND_COLLECTION)
+            .deleteMany(filter);
+        revalidatePath('/admin/refunds');
+        revalidatePath('/refundstatus');
+        revalidatePath('/order');
+        return { success: true, message: `Deleted ${result.deletedCount} refund(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Refund: failed to delete refunds in range', error);
+        return { success: false, message: 'Something went wrong. Please try again.', deletedCount: 0 };
     }
 }
 

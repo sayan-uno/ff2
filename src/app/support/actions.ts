@@ -722,6 +722,33 @@ export async function deleteTicket(ticketId: string): Promise<{ success: boolean
     }
 }
 
+// Admin deletes several reports at once by their _id, including each report's
+// images. Used by the "Delete Selected" / "Delete All in Filter" actions.
+export async function deleteTickets(ticketIds: string[]): Promise<{ success: boolean; message: string; deletedCount: number }> {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) {
+        return { success: false, message: 'Unauthorized.', deletedCount: 0 };
+    }
+
+    const validIds = (ticketIds || []).filter((id) => ObjectId.isValid(id));
+    if (validIds.length === 0) {
+        return { success: false, message: 'No valid reports selected.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const objectIds = validIds.map((id) => new ObjectId(id));
+        // Remove the images attached to these reports first, then the reports.
+        await db.collection<SupportImage>(IMAGE_COLLECTION).deleteMany({ ticketId: { $in: validIds } });
+        const result = await db.collection<SupportTicket>(COLLECTION).deleteMany({ _id: { $in: objectIds } });
+        revalidatePath('/admin/support');
+        return { success: true, message: `Deleted ${result.deletedCount} report(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Support: failed to delete tickets', error);
+        return { success: false, message: 'Failed to delete reports.', deletedCount: 0 };
+    }
+}
+
 // Whether a given gaming id is blocked from the support feature (admin only).
 export async function getSupportBlockStatus(gamingId: string): Promise<boolean> {
     noStore();

@@ -5,12 +5,14 @@ import { useState, useTransition, useEffect, useCallback } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Loader2, Search, ArrowUpDown, Trash2, Megaphone, Users, CheckCircle2, XCircle, Clock, Eye, EyeOff, Info, ChevronDown, ShieldX, Bell, BellOff, Smartphone } from 'lucide-react';
+import { Loader2, Search, ArrowUpDown, Trash2, Megaphone, Users, CheckCircle2, XCircle, Clock, Eye, EyeOff, Info, ChevronDown, ShieldX, Bell, BellOff, Smartphone, Copy, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { getNotifications, deleteNotification, getBroadcastNotifications, deleteBroadcastNotification, getBroadcastDetails, searchBroadcastUser } from '../actions';
+import { getNotifications, deleteNotification, deleteNotifications, deleteNotificationsInRange, getBroadcastNotifications, deleteBroadcastNotification, getBroadcastDetails, searchBroadcastUser } from '../actions';
 import type { Notification, BroadcastNotification } from '@/lib/definitions';
 import type { BroadcastDetailUser, BroadcastDetails, BroadcastUserSearchResult } from '../actions';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import Image from 'next/image';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
@@ -256,7 +258,9 @@ export default function NotificationList({ initialNotifications, initialHasMore,
   const [broadcastPage, setBroadcastPage] = useState(1);
   const [broadcastHasMore, setBroadcastHasMore] = useState(initialBroadcastHasMore);
   const [detailsBroadcastId, setDetailsBroadcastId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isPending, startTransition] = useTransition();
+  const [isDeleting, startDeleting] = useTransition();
   const { toast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
@@ -264,16 +268,51 @@ export default function NotificationList({ initialNotifications, initialHasMore,
   const search = searchParams.get('search') || '';
   const sort = searchParams.get('sort') || 'desc';
   const activeTab = searchParams.get('tab') || 'broadcasts';
+  const activeStartDate = searchParams.get('startDate') || '';
+  const activeEndDate = searchParams.get('endDate') || '';
+  const hasFilter = Boolean(search || activeStartDate || activeEndDate);
 
-  useEffect(() => { setNotifications(initialNotifications); setHasMore(initialHasMore); setPage(1); }, [initialNotifications, initialHasMore]);
+  useEffect(() => { setNotifications(initialNotifications); setHasMore(initialHasMore); setPage(1); setSelectedIds(new Set()); }, [initialNotifications, initialHasMore]);
   useEffect(() => { setBroadcasts(initialBroadcasts); setBroadcastHasMore(initialBroadcastHasMore); setBroadcastPage(1); }, [initialBroadcasts, initialBroadcastHasMore]);
 
-  const handleLoadMore = () => startTransition(async () => { const np = page + 1; const r = await getNotifications(np, search, sort); setNotifications(p => [...p, ...r.notifications]); setHasMore(r.hasMore); setPage(np); });
+  const handleLoadMore = () => startTransition(async () => { const np = page + 1; const r = await getNotifications(np, search, sort, activeStartDate, activeEndDate); setNotifications(p => [...p, ...r.notifications]); setHasMore(r.hasMore); setPage(np); });
   const handleBroadcastLoadMore = () => startTransition(async () => { const np = broadcastPage + 1; const r = await getBroadcastNotifications(np, sort); setBroadcasts(p => [...p, ...r.broadcasts]); setBroadcastHasMore(r.hasMore); setBroadcastPage(np); });
   const handleSortToggle = () => { const p = new URLSearchParams(searchParams); p.set('sort', sort === 'desc' ? 'asc' : 'desc'); router.push(`${pathname}?${p.toString()}`); };
-  const handleSearch = (e: React.FormEvent<HTMLFormElement>) => { e.preventDefault(); const p = new URLSearchParams(searchParams); p.set('search', new FormData(e.currentTarget).get('search') as string); p.delete('page'); router.push(`${pathname}?${p.toString()}`); };
+  const handleFilter = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const p = new URLSearchParams(searchParams);
+    const setOrDelete = (key: string, value: string) => { if (value) p.set(key, value); else p.delete(key); };
+    setOrDelete('search', (fd.get('search') as string)?.trim() || '');
+    setOrDelete('startDate', (fd.get('startDate') as string) || '');
+    setOrDelete('endDate', (fd.get('endDate') as string) || '');
+    p.delete('page');
+    router.push(`${pathname}?${p.toString()}`);
+  };
+  const handleClearFilters = () => { const p = new URLSearchParams(searchParams); p.delete('search'); p.delete('startDate'); p.delete('endDate'); p.delete('page'); router.push(`${pathname}?${p.toString()}`); };
   const handleTabChange = (v: string) => { const p = new URLSearchParams(searchParams); p.set('tab', v); router.push(`${pathname}?${p.toString()}`); };
-  const handleDelete = (id: string) => startTransition(async () => { const r = await deleteNotification(id); if (r.success) { setNotifications(p => p.filter(n => n._id.toString() !== id)); toast({ title: 'Success', description: r.message }); } else toast({ variant: 'destructive', title: 'Error', description: r.message }); });
+  const handleDelete = (id: string) => startTransition(async () => { const r = await deleteNotification(id); if (r.success) { setNotifications(p => p.filter(n => n._id.toString() !== id)); setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; }); toast({ title: 'Success', description: r.message }); } else toast({ variant: 'destructive', title: 'Error', description: r.message }); });
+
+  const allLoadedSelected = notifications.length > 0 && notifications.every(n => selectedIds.has(n._id.toString()));
+  const toggleSelectAll = (checked: boolean) => { if (checked) setSelectedIds(new Set(notifications.map(n => n._id.toString()))); else setSelectedIds(new Set()); };
+  const toggleSelectOne = (id: string, checked: boolean) => { setSelectedIds(prev => { const next = new Set(prev); if (checked) next.add(id); else next.delete(id); return next; }); };
+  const handleBulkCopy = async () => {
+    const ids = notifications.filter(n => selectedIds.has(n._id.toString())).map(n => n.gamingId);
+    if (ids.length === 0) return;
+    try { await navigator.clipboard.writeText(ids.join(',')); toast({ title: 'Copied', description: `Copied ${ids.length} Gaming ID(s) to clipboard.` }); }
+    catch { toast({ variant: 'destructive', title: 'Error', description: 'Could not access the clipboard.' }); }
+  };
+  const handleDeleteSelected = () => startDeleting(async () => {
+    const ids = Array.from(selectedIds);
+    const r = await deleteNotifications(ids);
+    if (r.success) { setNotifications(p => p.filter(n => !selectedIds.has(n._id.toString()))); setSelectedIds(new Set()); toast({ title: 'Deleted', description: r.message }); router.refresh(); }
+    else toast({ variant: 'destructive', title: 'Error', description: r.message });
+  });
+  const handleDeleteAllInRange = () => startDeleting(async () => {
+    const r = await deleteNotificationsInRange(search, activeStartDate, activeEndDate);
+    if (r.success) { setSelectedIds(new Set()); toast({ title: 'Deleted', description: r.message }); router.refresh(); }
+    else toast({ variant: 'destructive', title: 'Error', description: r.message });
+  });
   const handleDeleteBroadcast = (id: string) => startTransition(async () => { const r = await deleteBroadcastNotification(id); if (r.success) { setBroadcasts(p => p.filter(b => b._id.toString() !== id)); toast({ title: 'Success', description: r.message }); } else toast({ variant: 'destructive', title: 'Error', description: r.message }); });
   const handleBroadcastComplete = useCallback((id: string) => { setBroadcasts(p => p.map(b => b._id.toString() === id ? { ...b, status: 'completed' as const } : b)); router.refresh(); }, [router]);
 
@@ -333,13 +372,64 @@ export default function NotificationList({ initialNotifications, initialHasMore,
             </TabsContent>
 
             <TabsContent value="individual" className="space-y-4">
-              <form onSubmit={handleSearch} className="flex items-center gap-2 mb-4"><Input name="search" placeholder="Search by Gaming ID..." defaultValue={search} className="w-56" /><Button type="submit" variant="outline" size="icon"><Search className="h-4 w-4" /></Button></form>
+              <form onSubmit={handleFilter} className="flex flex-col gap-4 rounded-lg border bg-muted/30 p-4 mb-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="search">Search Gaming ID</Label>
+                    <Input id="search" name="search" placeholder="Gaming ID..." defaultValue={search} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="startDate">From (IST)</Label>
+                    <Input id="startDate" name="startDate" type="datetime-local" defaultValue={activeStartDate} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="endDate">To (IST)</Label>
+                    <Input id="endDate" name="endDate" type="datetime-local" defaultValue={activeEndDate} />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="submit" variant="outline"><Search className="mr-2 h-4 w-4" />Apply Filter</Button>
+                  {hasFilter && <Button type="button" variant="ghost" onClick={handleClearFilters}><X className="mr-2 h-4 w-4" />Clear</Button>}
+                </div>
+              </form>
               {notifications.length === 0 ? <p className="text-muted-foreground text-center py-8">No individual notifications found.</p> : (
                 <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox id="select-all-notifications" checked={allLoadedSelected} onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))} />
+                      <Label htmlFor="select-all-notifications" className="cursor-pointer text-sm">Select all on this page{selectedIds.size > 0 ? ` (${selectedIds.size} selected)` : ''}</Label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {selectedIds.size > 0 && (
+                        <Button variant="outline" size="sm" onClick={handleBulkCopy}><Copy className="mr-2 h-4 w-4" />Bulk Copy ({selectedIds.size})</Button>
+                      )}
+                      {selectedIds.size > 0 && (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild><Button variant="destructive" size="sm" disabled={isDeleting}>{isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}Delete Selected ({selectedIds.size})</Button></AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader><AlertDialogTitle>Delete selected notifications?</AlertDialogTitle><AlertDialogDescription>This permanently deletes the {selectedIds.size} selected notification(s). This action cannot be undone.</AlertDialogDescription></AlertDialogHeader>
+                            <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={handleDeleteSelected}>Yes, Delete</AlertDialogAction></AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )}
+                      {hasFilter && totalNotifications > 0 && (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild><Button variant="destructive" size="sm" disabled={isDeleting}>{isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}Delete All in Filter ({totalNotifications})</Button></AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader><AlertDialogTitle>Delete all {totalNotifications} notifications in this filter?</AlertDialogTitle><AlertDialogDescription>This permanently deletes every individual notification matching your current filter{activeStartDate || activeEndDate ? ' (the selected IST time frame)' : ''}, including any not shown on this page. This action cannot be undone.</AlertDialogDescription></AlertDialogHeader>
+                            <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={handleDeleteAllInRange}>Yes, Delete All</AlertDialogAction></AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )}
+                    </div>
+                  </div>
                   {notifications.map(n => (
                     <Card key={n._id.toString()} className="flex flex-col">
                       <CardHeader className="flex flex-row justify-between items-start pb-2">
-                        <div><CardTitle className="text-base font-mono">{n.gamingId}</CardTitle><CardDescription><FormattedDate dateString={n.createdAt as unknown as string} /></CardDescription></div>
+                        <div className="flex items-start gap-3">
+                          <Checkbox className="mt-1" checked={selectedIds.has(n._id.toString())} onCheckedChange={(checked) => toggleSelectOne(n._id.toString(), Boolean(checked))} aria-label="Select notification" />
+                          <div><CardTitle className="text-base font-mono">{n.gamingId}</CardTitle><CardDescription><FormattedDate dateString={n.createdAt as unknown as string} /></CardDescription></div>
+                        </div>
                         <Badge variant={n.isRead ? "secondary" : "default"}>{n.isRead ? "Read" : "Unread"}</Badge>
                       </CardHeader>
                       <CardContent>

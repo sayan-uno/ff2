@@ -10,7 +10,40 @@ import { ObjectId } from 'mongodb';
 
 const PAGE_SIZE = 5;
 
-export async function getNotifications(page: number, search: string, sort: string): Promise<{ notifications: Notification[]; hasMore: boolean; total: number }> {
+// India Standard Time is a fixed UTC+05:30 offset (no daylight saving). The
+// admin date/time pickers send a wall-clock value with no timezone (e.g.
+// "2026-06-14T15:30") entered in IST. We pin the IST offset here so it is
+// converted to the correct UTC instant before querying (createdAt is UTC).
+function istLocalToUtcDate(local: string): Date | null {
+    if (!local) return null;
+    const withSeconds = local.length === 16 ? `${local}:00` : local;
+    const date = new Date(`${withSeconds}+05:30`);
+    return isNaN(date.getTime()) ? null : date;
+}
+
+// Builds the query shared by the individual-notification listing, count and
+// range-deletion so that "what you see" and "what gets deleted" always match.
+// Broadcast notifications are always excluded; the time frame filters on
+// `createdAt` (IST).
+function buildIndividualNotificationsQuery(search: string, startDate?: string, endDate?: string) {
+    const query: any = {
+        // Exclude broadcast notifications from the individual list
+        broadcastId: { $exists: false },
+    };
+    if (search) {
+        query.gamingId = { $regex: search, $options: 'i' };
+    }
+    const start = istLocalToUtcDate(startDate || '');
+    const end = istLocalToUtcDate(endDate || '');
+    if (start || end) {
+        query.createdAt = {};
+        if (start) query.createdAt.$gte = start;
+        if (end) query.createdAt.$lte = end;
+    }
+    return query;
+}
+
+export async function getNotifications(page: number, search: string, sort: string, startDate?: string, endDate?: string): Promise<{ notifications: Notification[]; hasMore: boolean; total: number }> {
     noStore();
     const isAdmin = await isAdminAuthenticated();
     if (!isAdmin) {
@@ -21,13 +54,7 @@ export async function getNotifications(page: number, search: string, sort: strin
         const db = await connectToDatabase();
         const skip = (page - 1) * PAGE_SIZE;
 
-        let query: any = {
-            // Exclude broadcast notifications from the individual list
-            broadcastId: { $exists: false },
-        };
-        if (search) {
-            query.gamingId = { $regex: search, $options: 'i' };
-        }
+        const query = buildIndividualNotificationsQuery(search, startDate, endDate);
 
         const notifications = await db.collection<Notification>('notifications')
             .find(query)
@@ -65,6 +92,51 @@ export async function deleteNotification(notificationId: string): Promise<{ succ
     } catch (error) {
         console.error("Error deleting notification:", error);
         return { success: false, message: 'An error occurred.' };
+    }
+}
+
+// Permanently deletes one or more individual notifications by their _id.
+// Used for the single-row delete and the "Delete Selected" action.
+export async function deleteNotifications(ids: string[]) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const objectIds = ids
+        .filter(id => ObjectId.isValid(id))
+        .map(id => new ObjectId(id));
+
+    if (objectIds.length === 0) {
+        return { success: false, message: 'No valid notifications selected.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection('notifications').deleteMany({ _id: { $in: objectIds } });
+        revalidatePath('/admin/users-notification');
+        return { success: true, message: `Deleted ${result.deletedCount} notification(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error("Error deleting notifications:", error);
+        return { success: false, message: 'Failed to delete notifications.', deletedCount: 0 };
+    }
+}
+
+// Permanently deletes every individual notification matching the current
+// filter (search + IST time frame). Clears the whole time frame, not just the
+// loaded page. Broadcast notifications are never affected.
+export async function deleteNotificationsInRange(search: string, startDate?: string, endDate?: string) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const query = buildIndividualNotificationsQuery(search, startDate, endDate);
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection('notifications').deleteMany(query);
+        revalidatePath('/admin/users-notification');
+        return { success: true, message: `Deleted ${result.deletedCount} notification(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error("Error deleting notifications in range:", error);
+        return { success: false, message: 'Failed to delete notifications.', deletedCount: 0 };
     }
 }
 

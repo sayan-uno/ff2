@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,11 +28,14 @@ import {
   CalendarRange,
   RotateCcw,
   ReceiptText,
+  Copy,
 } from 'lucide-react';
 import {
   getAcceptedRefunds,
   updateRefundStatus,
   deleteRefundRequest,
+  deleteRefundRequests,
+  deleteAcceptedRefundsInRange,
   type AdminRefundListItem,
 } from '@/app/actions/refund';
 
@@ -55,7 +60,19 @@ const statusLabel: Record<AdminRefundListItem['status'], string> = {
 
 function FormattedDate({ value }: { value: string }) {
   const d = new Date(value);
-  return <>{`${d.toLocaleDateString()} ${d.toLocaleTimeString()}`}</>;
+  return (
+    <>
+      {d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+      })}{' '}
+      IST
+    </>
+  );
 }
 
 export default function RefundsClient({ initialRefunds, initialHasMore }: Props) {
@@ -67,7 +84,11 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [isPending, startTransition] = useTransition();
+  const [isDeleting, startDeleting] = useTransition();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const hasFilter = Boolean(from || to);
 
   // Reload the list from page 1 with the current sort + date filter.
   const reload = (next: { sort?: SortDir; from?: string; to?: string }) => {
@@ -84,6 +105,7 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
       setRefunds(rows);
       setHasMore(more);
       setPage(1);
+      setSelectedIds(new Set());
     });
   };
 
@@ -139,10 +161,76 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
     setBusyId(null);
     if (result.success) {
       setRefunds((prev) => prev.filter((r) => r._id !== id));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       toast({ title: 'Deleted', description: result.message });
     } else {
       toast({ variant: 'destructive', title: 'Error', description: result.message });
     }
+  };
+
+  const allLoadedSelected =
+    refunds.length > 0 && refunds.every((r) => selectedIds.has(r._id));
+
+  const toggleSelectAll = (checked: boolean) => {
+    if (checked) setSelectedIds(new Set(refunds.map((r) => r._id)));
+    else setSelectedIds(new Set());
+  };
+
+  const toggleSelectOne = (id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const handleBulkCopy = async () => {
+    // Preserve on-screen order and copy the displayed Gaming IDs.
+    const ids = refunds
+      .filter((r) => selectedIds.has(r._id))
+      .map((r) => r.visualGamingId || r.gamingId);
+    if (ids.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(ids.join(','));
+      toast({ title: 'Copied', description: `Copied ${ids.length} Gaming ID(s) to clipboard.` });
+    } catch {
+      toast({ variant: 'destructive', title: 'Error', description: 'Could not access the clipboard.' });
+    }
+  };
+
+  const handleDeleteSelected = () => {
+    const ids = Array.from(selectedIds);
+    startDeleting(async () => {
+      const result = await deleteRefundRequests(ids);
+      if (result.success) {
+        setRefunds((prev) => prev.filter((r) => !selectedIds.has(r._id)));
+        setSelectedIds(new Set());
+        toast({ title: 'Deleted', description: result.message });
+      } else {
+        toast({ variant: 'destructive', title: 'Error', description: result.message });
+      }
+    });
+  };
+
+  const handleDeleteAllInRange = () => {
+    startDeleting(async () => {
+      const result = await deleteAcceptedRefundsInRange({
+        from: from || undefined,
+        to: to || undefined,
+      });
+      if (result.success) {
+        toast({ title: 'Deleted', description: result.message });
+        setSelectedIds(new Set());
+        reload({});
+      } else {
+        toast({ variant: 'destructive', title: 'Error', description: result.message });
+      }
+    });
   };
 
   return (
@@ -161,7 +249,7 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
               </Button>
 
               <div className="flex flex-col">
-                <label className="text-[11px] text-muted-foreground mb-0.5">From</label>
+                <label className="text-[11px] text-muted-foreground mb-0.5">From (IST)</label>
                 <Input
                   type="datetime-local"
                   value={from}
@@ -170,7 +258,7 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
                 />
               </div>
               <div className="flex flex-col">
-                <label className="text-[11px] text-muted-foreground mb-0.5">To</label>
+                <label className="text-[11px] text-muted-foreground mb-0.5">To (IST)</label>
                 <Input
                   type="datetime-local"
                   value={to}
@@ -198,12 +286,87 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
             </p>
           ) : (
             <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="select-all-refunds"
+                    checked={allLoadedSelected}
+                    onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
+                  />
+                  <Label htmlFor="select-all-refunds" className="cursor-pointer text-sm">
+                    Select all on this page
+                    {selectedIds.size > 0 ? ` (${selectedIds.size} selected)` : ''}
+                  </Label>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedIds.size > 0 && (
+                    <Button variant="outline" size="sm" onClick={handleBulkCopy}>
+                      <Copy className="mr-2 h-4 w-4" />
+                      Bulk Copy ({selectedIds.size})
+                    </Button>
+                  )}
+                  {selectedIds.size > 0 && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="destructive" size="sm" disabled={isDeleting}>
+                          {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                          Delete Selected ({selectedIds.size})
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete selected refunds?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This permanently removes the {selectedIds.size} selected refund record(s). The users&apos; order pages go back to showing the order&apos;s original status. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={handleDeleteSelected}>
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                  {hasFilter && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="destructive" size="sm" disabled={isDeleting}>
+                          {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                          Delete All in Filter
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete all refunds in this time frame?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This permanently removes every accepted refund within the selected IST time frame, including any not shown on this page. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={handleDeleteAllInRange}>
+                            Delete All
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </div>
+              </div>
               {refunds.map((r) => {
                 const isBusy = busyId === r._id;
                 return (
                   <Card key={r._id} className="overflow-hidden">
                     <CardContent className="p-4">
                       <div className="flex items-start gap-3">
+                        <Checkbox
+                          className="mt-1"
+                          checked={selectedIds.has(r._id)}
+                          onCheckedChange={(checked) => toggleSelectOne(r._id, Boolean(checked))}
+                          aria-label="Select refund"
+                        />
                         <div className="relative h-14 w-14 shrink-0 rounded-md overflow-hidden bg-muted">
                           {r.productImageUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
