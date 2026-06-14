@@ -133,6 +133,34 @@ function DateSeparator({ date }: { date: string }) {
   );
 }
 
+// Renders message text, turning any URL into a clickable link. Used so the
+// "refund accepted" message (which contains the /refundstatus link) is tappable
+// in the chat, just like the notification bell auto-linkifies URLs.
+function LinkifiedText({ text }: { text: string }) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  return (
+    <span className="whitespace-pre-wrap break-words">
+      {parts.map((part, i) =>
+        part.match(urlRegex) ? (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline break-all"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </span>
+  );
+}
+
 // Centered "chat closed" notice.
 function ClosedNotice() {
   return (
@@ -317,10 +345,17 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
   }, [view]);
 
   // If we arrived with ?ticket=<id> (e.g. from the refund form), open that
-  // report's chat directly so the user lands in the inbox.
+  // report's chat directly so the user lands in the inbox. Arriving with ?new=1
+  // (e.g. from a failed refund's "contact support" link) opens the create-report
+  // form straight away.
   useEffect(() => {
     if (typeof window === 'undefined' || !initialUser) return;
-    const ticketId = new URLSearchParams(window.location.search).get('ticket');
+    const params = new URLSearchParams(window.location.search);
+    const ticketId = params.get('ticket');
+    if (params.get('new') === '1' && !ticketId) {
+      setView('new');
+      return;
+    }
     if (!ticketId) return;
     (async () => {
       const fresh = await getMyTicket(ticketId);
@@ -693,9 +728,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                         />
                       )}
                       <div className="px-1.5 pb-1 pt-0.5">
-                        {msg.text && (
-                          <span className="whitespace-pre-wrap break-words">{msg.text}</span>
-                        )}
+                        {msg.text && <LinkifiedText text={msg.text} />}
                         <span className="float-right ml-2 mt-1 text-[10px] text-gray-500 flex items-center gap-0.5">
                           <MessageTime date={msg.createdAt as any} />
                           {isUser &&

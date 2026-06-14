@@ -38,7 +38,9 @@ import {
   MoreVertical,
   Ban,
   ShieldCheck,
+  BadgeCheck,
 } from 'lucide-react';
+import AcceptRefundDialog from './accept-refund-dialog';
 import {
   getAllTicketsForAdmin,
   getTicketForAdmin,
@@ -188,6 +190,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const [activeBlocked, setActiveBlocked] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showRefundDialog, setShowRefundDialog] = useState(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
@@ -562,6 +565,10 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setShowRefundDialog(true)}>
+                        <BadgeCheck className="h-4 w-4 mr-2 text-emerald-600" />
+                        Accept refund request
+                      </DropdownMenuItem>
                       {activeBlocked ? (
                         <DropdownMenuItem onClick={handleToggleBlock}>
                           <ShieldCheck className="h-4 w-4 mr-2 text-green-600" />
@@ -743,6 +750,22 @@ export default function AdminSupportClient({ initialTickets }: Props) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Accept refund request dialog */}
+      {activeTicket && (
+        <AcceptRefundDialog
+          open={showRefundDialog}
+          onOpenChange={setShowRefundDialog}
+          ticketId={activeTicket._id.toString()}
+          gamingId={activeTicket.gamingId}
+          visualGamingId={activeTicket.visualGamingId}
+          onAccepted={async () => {
+            const fresh = await getTicketForAdmin(activeTicket._id.toString());
+            if (fresh) setActiveTicket(fresh);
+            refreshList();
+          }}
+        />
+      )}
     </div>
   );
 }

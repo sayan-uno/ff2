@@ -13,6 +13,7 @@ import { createTicket, uploadSupportImage, sendUserImageMessage, getImageQuota }
 import { Loader2, ImagePlus, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import GamingIdModal from '@/components/gaming-id-modal';
+import RefundStatusFloating from '@/components/refund-status-floating';
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
@@ -280,6 +281,10 @@ ${message}`;
           doesn't want to log in right now they can close it and look around.
           The modal reloads the page on successful login. */}
       <GamingIdModal isOpen={showLogin} onOpenChange={setShowLogin} />
+
+      {/* Floating nudge: if the user already has an accepted refund in progress,
+          point them to /refundstatus instead of re-submitting the same request. */}
+      <RefundStatusFloating />
     </div>
   );
 }

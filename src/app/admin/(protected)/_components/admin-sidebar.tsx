@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { logoutAdmin } from '@/app/actions';
-import { Home, ListChecks, ListX, Users, LogOut, Banknote, Tag, ArchiveRestore, Coins, ShieldBan, Box, EyeOff, Bell, CalendarPlus, MessageCircle, SlidersHorizontal, FileCode, PersonStanding, BadgeCheck, History, Clapperboard, BellRing, GalleryHorizontal, Timer, MessageSquareText, ShieldX, Fingerprint, Ban, Download, Activity, CreditCard, Headset } from 'lucide-react';
+import { Home, ListChecks, ListX, Users, LogOut, Banknote, Tag, ArchiveRestore, Coins, ShieldBan, Box, EyeOff, Bell, CalendarPlus, MessageCircle, SlidersHorizontal, FileCode, PersonStanding, BadgeCheck, History, Clapperboard, BellRing, GalleryHorizontal, Timer, MessageSquareText, ShieldX, Fingerprint, Ban, Download, Activity, CreditCard, Headset, ReceiptText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
 
@@ -17,6 +17,7 @@ const navItems = [
   { href: '/admin/users', label: 'User Management', icon: ShieldBan },
   { href: '/admin/notifications', label: 'Send Notification', icon: Bell },
   { href: '/admin/support', label: 'Support Inbox', icon: Headset },
+  { href: '/admin/refunds', label: 'Accepted Refunds', icon: ReceiptText },
   { href: '/admin/payment-sessions', label: 'Payment Sessions', icon: Timer },
   { href: '/admin/upi-management', label: 'UPI Management', icon: CreditCard },
   { href: '/admin/sms-logs', label: 'SMS Logs', icon: MessageSquareText },

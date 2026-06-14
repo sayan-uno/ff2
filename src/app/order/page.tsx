@@ -2,7 +2,9 @@
 'use client';
 
 import { getOrdersForUser, getUserData } from '@/app/actions';
+import { getMyRefundRequests } from '@/app/actions/refund';
 import { Order, User } from '@/lib/definitions';
+import { RefundRequest } from '@/lib/refund-definitions';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import Image from 'next/image';
@@ -13,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import ProductMedia from '@/components/product-media';
+import RefundStatusFloating from '@/components/refund-status-floating';
 
 
 const FormattedDate = ({ dateString }: { dateString: string }) => {
@@ -44,6 +47,9 @@ const FormattedDate = ({ dateString }: { dateString: string }) => {
 export default function OrderPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [user, setUser] = useState<User | null>(null);
+  // Map of orderId -> accepted refund request, so an accepted refund overrides
+  // the order's own status no matter what it later becomes (failed/completed/etc).
+  const [refundsByOrder, setRefundsByOrder] = useState<Record<string, RefundRequest>>({});
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -52,8 +58,14 @@ export default function OrderPage() {
       const userData = await getUserData();
       setUser(userData);
       if (userData) {
-        const userOrders = await getOrdersForUser();
+        const [userOrders, refunds] = await Promise.all([
+          getOrdersForUser(),
+          getMyRefundRequests(),
+        ]);
         setOrders(userOrders);
+        setRefundsByOrder(
+          Object.fromEntries(refunds.map((r) => [r.orderId, r]))
+        );
       }
       setIsLoading(false);
     };
@@ -109,6 +121,20 @@ export default function OrderPage() {
             const fee = order.finalPrice - order.productPrice + order.coinsUsed;
             const feeIsApplied = fee > 0.001; // Use a small epsilon for float comparison
 
+            // Once a refund is accepted for this order, it permanently overrides
+            // the order's own status — even if the admin later fails the order.
+            // The override only disappears if the admin deletes the refund record.
+            const refund = refundsByOrder[order._id.toString()];
+            const refundLabel = refund
+              ? refund.status === 'completed'
+                ? 'Refund Completed'
+                : refund.status === 'failed'
+                ? 'Refund Failed'
+                : 'Refund in progress'
+              : null;
+            const refundFailed = refund?.status === 'failed';
+            const refundInProgress = refund?.status === 'in_progress';
+
             return (
               <Card key={order._id.toString()} className="flex flex-col overflow-hidden">
                  <CardHeader className="flex flex-row items-start justify-between gap-4 p-4">
@@ -116,15 +142,21 @@ export default function OrderPage() {
                       <CardTitle className="text-lg leading-tight">{order.productName}</CardTitle>
                       <CardDescription className="text-sm mt-1">Gaming ID: {user.visualGamingId || order.gamingId}</CardDescription>
                    </div>
-                   <Badge 
+                   <Badge
                       variant={
-                          order.status === 'Completed' ? 'default' : 
-                          order.status === 'Processing' ? 'secondary' : 
+                          refundFailed ? 'destructive' :
+                          refundLabel ? 'default' :
+                          order.status === 'Completed' ? 'default' :
+                          order.status === 'Processing' ? 'secondary' :
                           'destructive'
                       }
-                      className={cn(order.status === 'Completed' && 'bg-green-500/80 text-white')}
+                      className={cn(
+                          order.status === 'Completed' && !refundLabel && 'bg-green-500/80 text-white',
+                          refundInProgress && 'bg-yellow-400 text-yellow-950 hover:bg-yellow-400',
+                          refundLabel && !refundFailed && !refundInProgress && 'bg-emerald-600 text-white'
+                      )}
                   >
-                      {order.status}
+                      {refundLabel || order.status}
                   </Badge>
                 </CardHeader>
                 <CardContent className="p-4 flex-grow">
@@ -153,17 +185,29 @@ export default function OrderPage() {
                 </CardContent>
                 <CardFooter className="bg-muted/40 p-4 text-sm text-muted-foreground flex justify-between items-center">
                   <span><FormattedDate dateString={order.createdAt as unknown as string} /></span>
-                   <Button asChild variant="link" className="p-0 h-auto">
-                      <Link href="/refund-request">
-                        Request a Refund
-                      </Link>
-                    </Button>
+                   {refundLabel ? (
+                      <Button asChild variant="link" className="p-0 h-auto text-emerald-600">
+                        <Link href="/refundstatus">
+                          Check Refund Status
+                        </Link>
+                      </Button>
+                    ) : (
+                      <Button asChild variant="link" className="p-0 h-auto">
+                        <Link href="/refund-request">
+                          Request a Refund
+                        </Link>
+                      </Button>
+                    )}
                 </CardFooter>
               </Card>
             )
           })}
         </div>
       )}
+
+      {/* Floating nudge: if the user already has an accepted refund in progress,
+          point them to /refundstatus to track it. */}
+      <RefundStatusFloating />
     </div>
   );
 }
