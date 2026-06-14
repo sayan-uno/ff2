@@ -114,6 +114,10 @@ export interface Notification {
     gamingId: string; // The recipient's gaming ID
     senderGamingId?: string; // The sender's gaming ID, for gift history
     message: string;
+    // Optional rich, self-contained HTML body (server-generated, trusted) rendered
+    // in the notification bell instead of the plain `message`. `message` is kept as
+    // a plain-text fallback for push notifications and clients that don't render HTML.
+    html?: string;
     imageUrl?: string;
     isRead: boolean;
     createdAt: Date;

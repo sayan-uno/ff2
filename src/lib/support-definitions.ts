@@ -10,6 +10,10 @@ export interface SupportMessage {
     _id: ObjectId;
     sender: 'user' | 'admin'; // Who wrote the message
     text: string;
+    // Optional rich, self-contained HTML body (server-generated, trusted) rendered
+    // inside the chat bubble instead of the plain `text`. `text` is kept as the
+    // plain-text fallback (e.g. the admin inbox preview / older clients).
+    html?: string;
     imageIds?: string[];      // References to SupportImage documents (what is stored)
     // Populated only when a single ticket is fetched for viewing (NOT stored in the DB).
     images?: { _id: string; url: string }[];

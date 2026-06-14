@@ -619,7 +619,17 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                               />
                             )}
                             <div className="px-1.5 pb-1">
-                              {msg.text && <span className="whitespace-pre-wrap break-words">{msg.text}</span>}
+                              {msg.html ? (
+                                // Rich, server-generated HTML bubble (e.g. refund-accepted
+                                // card). Trusted content built on the server; constrained so
+                                // it stays inside the chat bubble.
+                                <div
+                                  className="max-w-full overflow-hidden [&_img]:max-w-full"
+                                  dangerouslySetInnerHTML={{ __html: msg.html }}
+                                />
+                              ) : (
+                                msg.text && <span className="whitespace-pre-wrap break-words">{msg.text}</span>
+                              )}
                               <span className="float-right ml-2 mt-1 text-[10px] text-gray-500 flex items-center gap-0.5">
                                 <MessageTime date={msg.createdAt as any} />
                                 {isAdmin &&
