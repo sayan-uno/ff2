@@ -40,8 +40,11 @@ function buildRefundAcceptedHtml(params: {
     days: number;
     statusUrl: string;
     supportUrl: string;
+    // Whether to render the secondary "Open Support Page" button. Shown in the
+    // notification bell, but hidden inside the support chat (it's already there).
+    showSupportButton: boolean;
 }): string {
-    const { products, days, statusUrl, supportUrl } = params;
+    const { products, days, statusUrl, supportUrl, showSupportButton } = params;
 
     const productRows = products
         .map(
@@ -107,7 +110,7 @@ function buildRefundAcceptedHtml(params: {
         <div class="rfa-products">${productRows}</div>
         <div class="rfa-eta">⏱️ Completed within <b>${days} days</b></div>
         <a class="rfa-btn" href="${statusUrl}" target="_blank" rel="noopener noreferrer">Track Refund →</a>
-        <a class="rfa-btn rfa-btn-support" href="${supportUrl}" target="_blank" rel="noopener noreferrer">💬 Open Support Page</a>
+        ${showSupportButton ? `<a class="rfa-btn rfa-btn-support" href="${supportUrl}" target="_blank" rel="noopener noreferrer">💬 Open Support Page</a>` : ''}
     </div>`;
 }
 
@@ -447,21 +450,26 @@ ${productLines}
 
 It will be completed within ${REFUND_WINDOW_DAYS} days. You can track the live progress here: ${statusUrl}`;
 
-        const refundCardHtml = buildRefundAcceptedHtml({
-            products: orders.map((o) => ({
-                name: o.productName,
-                amount: o.finalPrice ?? o.productPrice ?? 0,
-            })),
+        const refundCardProducts = orders.map((o) => ({
+            name: o.productName,
+            amount: o.finalPrice ?? o.productPrice ?? 0,
+        }));
+
+        // Chat card omits the "Open Support Page" button — the user is already on
+        // the support page when reading it.
+        const chatCardHtml = buildRefundAcceptedHtml({
+            products: refundCardProducts,
             days: REFUND_WINDOW_DAYS,
             statusUrl,
             supportUrl,
+            showSupportButton: false,
         });
 
         const adminMessage: SupportMessage = {
             _id: new ObjectId(),
             sender: 'admin',
             text: chatText,   // plain-text fallback (admin inbox preview / older clients)
-            html: refundCardHtml,
+            html: chatCardHtml,
             createdAt: now,
         };
         await db.collection<SupportTicket>(SUPPORT_COLLECTION).updateOne(
@@ -478,10 +486,18 @@ It will be completed within ${REFUND_WINDOW_DAYS} days. You can track the live p
         // that doesn't render HTML).
         const notifMessage = `🎉 Good news! Your refund request was accepted and is now in progress. It will be completed within ${REFUND_WINDOW_DAYS} days. Track it here: ${statusUrl}
 Need help? Reach us on the support page: ${supportUrl}`;
+        // Bell card includes the "Open Support Page" button.
+        const bellCardHtml = buildRefundAcceptedHtml({
+            products: refundCardProducts,
+            days: REFUND_WINDOW_DAYS,
+            statusUrl,
+            supportUrl,
+            showSupportButton: true,
+        });
         const newNotification: Omit<Notification, '_id'> = {
             gamingId,
             message: notifMessage,
-            html: refundCardHtml,
+            html: bellCardHtml,
             isRead: false,
             createdAt: now,
             type: 'refund_status',
