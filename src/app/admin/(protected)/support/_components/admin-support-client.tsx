@@ -45,6 +45,7 @@ import {
   Copy,
 } from 'lucide-react';
 import AcceptRefundDialog from './accept-refund-dialog';
+import SupportUserIdentityHeader from './support-user-identity-header';
 import {
   getAllTicketsForAdmin,
   getTicketForAdmin,
@@ -771,6 +772,15 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
+
+                {/* Live user-identity strip: who the report's UID really is
+                    (Visual / Promoted old / Promoted new / not found). Keyed by
+                    ticket id so it re-resolves freshly each time a report opens. */}
+                <SupportUserIdentityHeader
+                  key={activeTicket._id.toString()}
+                  ticketId={activeTicket._id.toString()}
+                  sourceUid={activeTicket.gamingId}
+                />
 
                 {/* Messages */}
                 <div
