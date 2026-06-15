@@ -39,7 +39,7 @@ export interface SupportMessage {
     // role that triggered it) so unread counting / previews keep working, but the
     // UI keys off `kind === 'system'` for rendering.
     kind?: 'system';
-    systemType?: 'upload_limit_request' | 'upload_limit_granted';
+    systemType?: 'upload_limit_request' | 'upload_limit_granted' | 'callback_request';
 
     createdAt: Date;
 }

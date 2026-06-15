@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Paperclip,
   Image as ImageIcon,
+  Phone,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -111,17 +112,22 @@ export async function uploadFileInChunks(
 // A centered system banner inside the chat (limit requested / limit granted).
 export function SystemNotice({ message, type }: { message: string; type?: string }) {
     const granted = type === 'upload_limit_granted';
+    const callback = type === 'callback_request';
     return (
         <div className="flex justify-center my-3">
             <div
                 className={`max-w-[88%] text-center px-4 py-2.5 rounded-xl shadow-sm border text-[12.5px] leading-relaxed flex items-start gap-2 ${
                     granted
                         ? 'bg-[#E7F8EF] border-green-200 text-green-800'
+                        : callback
+                        ? 'bg-[#E8F4F2] border-[#075E54]/20 text-[#075E54]'
                         : 'bg-[#FFF6E5] border-amber-200 text-amber-800'
                 }`}
             >
                 {granted ? (
                     <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+                ) : callback ? (
+                    <Phone className="h-4 w-4 mt-0.5 shrink-0" />
                 ) : (
                     <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                 )}

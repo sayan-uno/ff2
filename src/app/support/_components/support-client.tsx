@@ -37,6 +37,8 @@ import {
   requestUploadLimitIncrease,
   sendUserFileMessage,
 } from '../file-actions';
+import { requestCallback } from '../callback-actions';
+import { CallButton, CallbackDialog } from './support-callback';
 import {
   uploadFileInChunks,
   FileAttachments,
@@ -216,7 +218,9 @@ function MessageTime({ date }: { date: string }) {
 }
 
 // The chat header that mimics a WhatsApp contact: Garena logo + name + bluetick.
-function ChatHeader({ onBack }: { onBack: () => void }) {
+// `onCall` (when provided) shows a phone button in the top-right corner that
+// lets the user request a callback from a support member.
+function ChatHeader({ onBack, onCall }: { onBack: () => void; onCall?: () => void }) {
   return (
     <div className="flex items-center gap-3 bg-[#075E54] text-white px-3 py-2.5 shadow-md">
       <button
@@ -236,6 +240,7 @@ function ChatHeader({ onBack }: { onBack: () => void }) {
         </div>
         <span className="text-[11px] text-white/80">Official Support</span>
       </div>
+      {onCall && <CallButton onClick={onCall} />}
     </div>
   );
 }
@@ -283,6 +288,10 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
 
   // Login popup (shown only when a logged-out user tries to create a report).
   const [showLogin, setShowLogin] = useState(false);
+
+  // "Request a callback" popup state (shown from the chat header phone button).
+  const [showCallback, setShowCallback] = useState(false);
+  const [callbackSubmitting, setCallbackSubmitting] = useState(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
@@ -422,6 +431,27 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
       );
     }
   }, []);
+
+  // User confirmed "Yes" in the callback popup: post the system notice into the
+  // active report, then refresh the chat so it appears centered immediately.
+  const handleRequestCallback = async () => {
+    if (!activeTicket) return;
+    const ticketId = activeTicket._id.toString();
+    setCallbackSubmitting(true);
+    const res = await requestCallback(ticketId);
+    setCallbackSubmitting(false);
+    setShowCallback(false);
+
+    if (!res.success) {
+      toast({ variant: 'destructive', title: 'Error', description: res.message });
+      return;
+    }
+
+    const fresh = await getMyTicket(ticketId);
+    if (fresh) setActiveTicket(fresh);
+    refreshList();
+    toast({ title: 'Callback requested', description: res.message });
+  };
 
   const handleCreate = async () => {
     if (!newMessage.trim()) {
@@ -736,7 +766,10 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
       // h-[100dvh] adapts to the device's actual visible screen height.
       <div className="fixed inset-0 z-[60] bg-[#ECE5DD] flex justify-center">
         <div className="flex flex-col w-full max-w-2xl h-[100dvh] min-h-0 bg-[#ECE5DD] sm:border-x sm:shadow-2xl">
-          <ChatHeader onBack={() => { setView('list'); setActiveTicket(null); setStagedImages([]); setChatInput(''); refreshList(); }} />
+          <ChatHeader
+            onBack={() => { setView('list'); setActiveTicket(null); setStagedImages([]); setChatInput(''); refreshList(); }}
+            onCall={() => setShowCallback(true)}
+          />
 
           {/* Messages area with WhatsApp-like background */}
           <div
@@ -979,6 +1012,14 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
             <img src={zoomedImage} alt="attachment" className="max-h-full max-w-full object-contain rounded" />
           </div>
         )}
+
+        {/* "Request a callback" confirmation popup */}
+        <CallbackDialog
+          open={showCallback}
+          submitting={callbackSubmitting}
+          onConfirm={handleRequestCallback}
+          onClose={() => setShowCallback(false)}
+        />
       </div>
     );
   }
