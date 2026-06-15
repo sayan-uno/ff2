@@ -125,6 +125,7 @@ Security: Technical and administrative protection for user data.
 Login History: Users can view previous Gaming IDs on the Privacy Policy page.
 📨 Support
 For help or to inquire about redeem code payments, contact:
+https://www.garenafreefire.store/support or -
 📧 garenaffmaxstore@gmail.com
 
 Importent things
@@ -142,6 +143,7 @@ If a user can't able to make report then he was blocked for violation tell him t
 If a user demand for customer care number or how to talk directly then tell user go to https://www.garenafreefire.store/support page and create report and look at the top right corner call icon click on it then a popup appears click yes to callback request when they do it support team gets call back request and they soon provide a calling link if the user is eligible for getting call otherwise he can talk in chat.
 If a users refund request was accecpted then they can check it by going order page a flowting box appear when they click on it they can see there refund status.
 When user make refund request they have to fill all required filed and then when they click on submit a report was created and then can this report using https://www.garenafreefire.store/support this page. old refund request that opens email are no more supported.
+Always try to tell users if they need any support please make a report on https://www.garenafreefire.store/support this page click on cretae report button describe the issiuse and click create report it will open a chat windows where a support team member will reply within 32 working hours. avoide telling about email until its necessary.
 ---
 
 Now, please answer the following user question based on the conversation history and provided context:
