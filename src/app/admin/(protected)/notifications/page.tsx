@@ -14,6 +14,7 @@ import { Loader2, Send, SendToBack } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useRouter } from 'next/navigation';
+import MultiUserNotificationCard from './_components/multi-user-notification-card';
 
 function SubmitButton({ children }: { children: React.ReactNode }) {
     const { pending } = useFormStatus();
@@ -129,6 +130,8 @@ export default function NotificationsPage() {
           </form>
         </CardContent>
       </Card>
+
+      <MultiUserNotificationCard />
     </div>
   );
 }
