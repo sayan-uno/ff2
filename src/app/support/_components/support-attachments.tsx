@@ -224,6 +224,35 @@ export function isSystemMessage(msg: SupportMessage): boolean {
     return (msg as any).kind === 'system';
 }
 
+// Small placeholder tiles shown where an admin deleted a message's attachment(s).
+// The bytes are gone (to reclaim space) but the icon keeps the history readable:
+// "a photo/video/file was here, since removed."
+export function DeletedAttachmentTombstones({
+    kinds,
+}: {
+    kinds: ('image' | 'video' | 'file')[];
+}) {
+    if (!kinds || kinds.length === 0) return null;
+    return (
+        <div className="mb-1 flex flex-wrap gap-1.5">
+            {kinds.map((kind, i) => {
+                const Icon = kind === 'image' ? ImageIcon : kind === 'video' ? Film : FileText;
+                const label = kind === 'image' ? 'Photo' : kind === 'video' ? 'Video' : 'File';
+                return (
+                    <div
+                        key={i}
+                        className="flex items-center gap-1.5 rounded-md border border-dashed border-gray-300 bg-black/5 px-2 py-1 text-[11px] text-gray-500"
+                        title={label}
+                    >
+                        <Icon className="h-3.5 w-3.5 opacity-60" />
+                        <span className="italic">{label}</span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Create-form attachment picker (used by the support "Create Report" form and
 // the Refund Request page). Lets the user attach Photos / Videos / Files before

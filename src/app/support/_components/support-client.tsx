@@ -46,6 +46,7 @@ import {
   DEFAULT_UPLOAD_LIMIT_BYTES,
   AddAttachmentButton,
   StagedAttachmentsStrip,
+  DeletedAttachmentTombstones,
   type StagedAttachment,
 } from './support-attachments';
 import type { SupportTicket, SupportMessage } from '@/lib/support-definitions';
@@ -824,6 +825,9 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                           uploading={(msg as any).uploading}
                           progress={(msg as any).uploading ? fileProgress : null}
                         />
+                      )}
+                      {msg.deletedAttachmentKinds && msg.deletedAttachmentKinds.length > 0 && (
+                        <DeletedAttachmentTombstones kinds={msg.deletedAttachmentKinds} />
                       )}
                       <div className="px-1.5 pb-1 pt-0.5">
                         {msg.html ? (

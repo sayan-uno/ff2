@@ -232,6 +232,33 @@ export async function deleteTicketFiles(
     }
 }
 
+// Delete specific GridFS files by id (used when an admin removes a single
+// message's attachments). Returns the kind of each successfully-removed file so
+// the caller can leave the matching tombstone icon. Missing/invalid ids skipped.
+export async function deleteSupportFilesByIds(
+    db: MongoDbWithClient,
+    fileIds: string[]
+): Promise<('image' | 'video' | 'file')[]> {
+    const kinds: ('image' | 'video' | 'file')[] = [];
+    const bucket = getSupportBucket(db);
+    for (const id of fileIds || []) {
+        if (!ObjectId.isValid(id)) continue;
+        const _id = new ObjectId(id);
+        const doc = await db
+            .collection(`${SUPPORT_FILES_BUCKET}.files`)
+            .findOne({ _id }, { projection: { metadata: 1 } });
+        const meta = (doc?.metadata || {}) as Partial<SupportFileMetadata>;
+        const kind = meta.kind === 'image' || meta.kind === 'video' ? meta.kind : 'file';
+        try {
+            await bucket.delete(_id);
+            kinds.push(kind);
+        } catch {
+            /* already gone */
+        }
+    }
+    return kinds;
+}
+
 // Opportunistic cleanup of temp chunks left behind by abandoned uploads.
 export async function sweepStaleUploadChunks(db: MongoDbWithClient): Promise<void> {
     try {

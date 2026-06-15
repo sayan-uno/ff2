@@ -27,6 +27,12 @@ export interface SupportMessage {
     // Populated only when a ticket is fetched for viewing (NOT stored in the DB).
     files?: SupportFileRef[];
 
+    // --- Deleted-attachment tombstones (admin only) ---
+    // When an admin deletes a message's attachment(s), the bytes are purged from
+    // the DB to reclaim space but the message stays, showing a small icon per
+    // removed attachment so the history still reflects "something was here".
+    deletedAttachmentKinds?: ('image' | 'video' | 'file')[];
+
     // --- System notices ---
     // A 'system' message is a server-generated notice rendered as a centered
     // banner in the chat (NOT a left/right bubble). `sender` is still set (to the

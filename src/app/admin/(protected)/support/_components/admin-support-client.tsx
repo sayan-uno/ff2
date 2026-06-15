@@ -49,6 +49,8 @@ import {
   FileText,
   HardDriveUpload,
   RotateCcw,
+  Pencil,
+  ImageOff,
 } from 'lucide-react';
 import AcceptRefundDialog from './accept-refund-dialog';
 import SupportUserIdentityHeader from './support-user-identity-header';
@@ -70,12 +72,18 @@ import {
   sendAdminFileMessage,
 } from '@/app/support/file-actions';
 import {
+  adminEditMessage,
+  adminDeleteMessage,
+  adminDeleteMessageAttachments,
+} from '@/app/support/admin-message-actions';
+import {
   uploadFileInChunks,
   FileAttachments,
   SystemNotice,
   isSystemMessage,
   formatBytes,
   DEFAULT_UPLOAD_LIMIT_BYTES,
+  DeletedAttachmentTombstones,
 } from '@/app/support/_components/support-attachments';
 import type { SupportTicket, SupportMessage } from '@/lib/support-definitions';
 
@@ -120,6 +128,52 @@ function ClosedNotice() {
 // A photo staged for sending: the real File (uploaded to GridFS in chunks) plus
 // a data-URI preview for the thumbnail strip and optimistic bubble.
 type StagedPhoto = { file: File; preview: string };
+
+// The little ⋮ control that appears on hover next to each message, giving the
+// admin silent edit / delete-attachment / delete-message actions. Admin-only —
+// this whole client is behind the admin gate.
+function MessageAdminMenu({
+  hasAttachment,
+  onEdit,
+  onDeleteAttachment,
+  onDeleteMessage,
+}: {
+  hasAttachment: boolean;
+  onEdit: () => void;
+  onDeleteAttachment: () => void;
+  onDeleteMessage: () => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
+          title="Message actions"
+        >
+          <MoreVertical className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem onClick={onEdit}>
+          <Pencil className="h-4 w-4 mr-2 text-blue-600" />
+          Edit message
+        </DropdownMenuItem>
+        {hasAttachment && (
+          <DropdownMenuItem onClick={onDeleteAttachment}>
+            <ImageOff className="h-4 w-4 mr-2 text-amber-600" />
+            Delete attachment
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onClick={onDeleteMessage} className="text-destructive focus:text-destructive">
+          <Trash2 className="h-4 w-4 mr-2" />
+          Delete message
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function fileToDataUri(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -235,6 +289,12 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const [isSettingLimit, setIsSettingLimit] = useState(false);
   // Progress (0..1) of an in-flight admin video/file upload.
   const [fileProgress, setFileProgress] = useState<number | null>(null);
+  // Per-message admin editing / deletion state.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ messageId: string; mode: 'message' | 'attachment' } | null>(null);
+  const [isDeletingMsg, setIsDeletingMsg] = useState(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
@@ -514,6 +574,55 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     e.target.value = '';
     if (!file) return;
     await handleSendFile(file, kind);
+  };
+
+  // --- Admin per-message edit / delete ---
+  const startEdit = (msg: SupportMessage) => {
+    setEditingId(msg._id?.toString() || null);
+    setEditingText(msg.text || '');
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingText('');
+  };
+  const saveEdit = async () => {
+    if (!activeTicket || !editingId) return;
+    const ticketId = activeTicket._id.toString();
+    setIsSavingEdit(true);
+    sendingRef.current = true; // keep the 5s poll from clobbering mid-save
+    const res = await adminEditMessage(ticketId, editingId, editingText);
+    setIsSavingEdit(false);
+    sendingRef.current = false;
+    if (res.success) {
+      const fresh = await getTicketForAdmin(ticketId);
+      if (fresh) setActiveTicket(fresh);
+      refreshList();
+      cancelEdit();
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: res.message });
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!activeTicket || !pendingDelete) return;
+    const ticketId = activeTicket._id.toString();
+    setIsDeletingMsg(true);
+    sendingRef.current = true;
+    const res =
+      pendingDelete.mode === 'attachment'
+        ? await adminDeleteMessageAttachments(ticketId, pendingDelete.messageId)
+        : await adminDeleteMessage(ticketId, pendingDelete.messageId);
+    setIsDeletingMsg(false);
+    sendingRef.current = false;
+    setPendingDelete(null);
+    if (res.success) {
+      toast({ title: 'Done', description: res.message });
+      const fresh = await getTicketForAdmin(ticketId);
+      if (fresh) setActiveTicket(fresh);
+      refreshList();
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: res.message });
+    }
   };
 
   const handleToggleStatus = async () => {
@@ -925,10 +1034,27 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                       .filter((f) => f.kind === 'image')
                       .map((f) => ({ _id: f._id, url: `/api/support/file/${f._id}` }));
                     const docFiles = (msg.files || []).filter((f) => f.kind !== 'image');
+
+                    // Admin per-message controls only make sense on a real, saved
+                    // message (not an in-flight optimistic one).
+                    const msgId = msg._id?.toString() || '';
+                    const isReal = /^[a-f\d]{24}$/i.test(msgId) && !(msg as any).uploading;
+                    const hasAttachment =
+                      (msg.images?.length || 0) + (msg.files?.length || 0) +
+                      (msg.imageIds?.length || 0) + (msg.fileIds?.length || 0) > 0;
+                    const isEditing = editingId === msgId;
                     return (
                       <Fragment key={msg._id?.toString() || idx}>
                         {showDate && <DateSeparator date={msg.createdAt as any} />}
-                        <div className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`group flex items-center gap-1 ${isAdmin ? 'justify-end' : 'justify-start'}`}>
+                          {isAdmin && isReal && !isEditing && (
+                            <MessageAdminMenu
+                              hasAttachment={hasAttachment}
+                              onEdit={() => startEdit(msg)}
+                              onDeleteAttachment={() => setPendingDelete({ messageId: msgId, mode: 'attachment' })}
+                              onDeleteMessage={() => setPendingDelete({ messageId: msgId, mode: 'message' })}
+                            />
+                          )}
                           <div
                             className={`relative max-w-[75%] p-1 rounded-lg shadow-sm text-[14px] leading-snug ${
                               isAdmin ? 'bg-[#DCF8C6] rounded-tr-none' : 'bg-white rounded-tl-none'
@@ -958,33 +1084,66 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                                 progress={(msg as any).uploading ? fileProgress : null}
                               />
                             )}
+                            {msg.deletedAttachmentKinds && msg.deletedAttachmentKinds.length > 0 && (
+                              <DeletedAttachmentTombstones kinds={msg.deletedAttachmentKinds} />
+                            )}
                             <div className="px-1.5 pb-1">
-                              {msg.html ? (
-                                // Rich, server-generated HTML bubble (e.g. refund-accepted
-                                // card). Trusted content built on the server; constrained so
-                                // it stays inside the chat bubble.
-                                <div
-                                  className="max-w-full overflow-hidden [&_img]:max-w-full"
-                                  dangerouslySetInnerHTML={{ __html: msg.html }}
-                                />
+                              {isEditing ? (
+                                <div className="space-y-1.5 py-0.5">
+                                  <Textarea
+                                    value={editingText}
+                                    onChange={(e) => setEditingText(e.target.value)}
+                                    rows={2}
+                                    autoFocus
+                                    className="resize-none bg-white text-[14px] min-h-[40px]"
+                                  />
+                                  <div className="flex justify-end gap-1.5">
+                                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancelEdit} disabled={isSavingEdit}>
+                                      Cancel
+                                    </Button>
+                                    <Button size="sm" className="h-7 text-xs" onClick={saveEdit} disabled={isSavingEdit}>
+                                      {isSavingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
+                                    </Button>
+                                  </div>
+                                </div>
                               ) : (
-                                msg.text && <span className="whitespace-pre-wrap break-words">{msg.text}</span>
-                              )}
-                              <span className="float-right ml-2 mt-1 text-[10px] text-gray-500 flex items-center gap-0.5">
-                                <MessageTime date={msg.createdAt as any} />
-                                {isAdmin &&
-                                  (activeTicket.userLastReadAt &&
-                                  new Date(activeTicket.userLastReadAt).getTime() >=
-                                    new Date(msg.createdAt as any).getTime() ? (
-                                    // The user genuinely viewed the chat after this reply → seen.
-                                    <CheckCheck className="h-3 w-3 text-[#34B7F1]" />
+                                <>
+                                  {msg.html ? (
+                                    // Rich, server-generated HTML bubble (e.g. refund-accepted
+                                    // card). Trusted content built on the server; constrained so
+                                    // it stays inside the chat bubble.
+                                    <div
+                                      className="max-w-full overflow-hidden [&_img]:max-w-full"
+                                      dangerouslySetInnerHTML={{ __html: msg.html }}
+                                    />
                                   ) : (
-                                    // Delivered, but the user hasn't opened it yet → grey double tick.
-                                    <CheckCheck className="h-3 w-3 text-gray-400" />
-                                  ))}
-                              </span>
+                                    msg.text && <span className="whitespace-pre-wrap break-words">{msg.text}</span>
+                                  )}
+                                  <span className="float-right ml-2 mt-1 text-[10px] text-gray-500 flex items-center gap-0.5">
+                                    <MessageTime date={msg.createdAt as any} />
+                                    {isAdmin &&
+                                      (activeTicket.userLastReadAt &&
+                                      new Date(activeTicket.userLastReadAt).getTime() >=
+                                        new Date(msg.createdAt as any).getTime() ? (
+                                        // The user genuinely viewed the chat after this reply → seen.
+                                        <CheckCheck className="h-3 w-3 text-[#34B7F1]" />
+                                      ) : (
+                                        // Delivered, but the user hasn't opened it yet → grey double tick.
+                                        <CheckCheck className="h-3 w-3 text-gray-400" />
+                                      ))}
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
+                          {!isAdmin && isReal && !isEditing && (
+                            <MessageAdminMenu
+                              hasAttachment={hasAttachment}
+                              onEdit={() => startEdit(msg)}
+                              onDeleteAttachment={() => setPendingDelete({ messageId: msgId, mode: 'attachment' })}
+                              onDeleteMessage={() => setPendingDelete({ messageId: msgId, mode: 'message' })}
+                            />
+                          )}
                         </div>
                       </Fragment>
                     );
@@ -1126,6 +1285,33 @@ export default function AdminSupportClient({ initialTickets }: Props) {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {isDeleting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Per-message delete confirmation (delete attachment vs whole message) */}
+      <AlertDialog open={!!pendingDelete} onOpenChange={(open) => !open && setPendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingDelete?.mode === 'attachment' ? 'Delete this attachment?' : 'Delete this message?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.mode === 'attachment'
+                ? 'The file will be permanently removed from the database to free space. A small placeholder icon will remain in the chat so the history shows an attachment was here. This cannot be undone.'
+                : 'This permanently removes the message (and any attached files) from the conversation for both you and the user. This cannot be undone.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingMsg}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); confirmDelete(); }}
+              disabled={isDeletingMsg}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeletingMsg ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
