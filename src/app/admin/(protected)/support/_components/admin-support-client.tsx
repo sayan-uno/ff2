@@ -58,8 +58,6 @@ import {
   sendAdminReply,
   markTicketReadByAdmin,
   setTicketStatus,
-  uploadAdminImage,
-  sendAdminImageMessage,
   deleteTicket,
   deleteTickets,
   blockSupportUser,
@@ -119,7 +117,9 @@ function ClosedNotice() {
   );
 }
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+// A photo staged for sending: the real File (uploaded to GridFS in chunks) plus
+// a data-URI preview for the thumbnail strip and optimistic bubble.
+type StagedPhoto = { file: File; preview: string };
 
 function fileToDataUri(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -224,7 +224,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
-  const [stagedImages, setStagedImages] = useState<string[]>([]);
+  const [stagedImages, setStagedImages] = useState<StagedPhoto[]>([]);
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [activeBlocked, setActiveBlocked] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -339,22 +339,16 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     e.target.value = '';
     if (files.length === 0) return;
 
-    const accepted: string[] = [];
-    let rejectedForSize = false;
+    // Photos now go through GridFS (no 8MB inline cap); admins aren't size-limited
+    // beyond the global 250MB ceiling enforced server-side.
+    const accepted: StagedPhoto[] = [];
     for (const file of files) {
       if (!file.type.startsWith('image/')) continue;
-      if (file.size > MAX_IMAGE_BYTES) {
-        rejectedForSize = true;
-        continue;
-      }
       try {
-        accepted.push(await fileToDataUri(file));
+        accepted.push({ file, preview: await fileToDataUri(file) });
       } catch {
         /* ignore */
       }
-    }
-    if (rejectedForSize) {
-      toast({ variant: 'destructive', title: 'Image too large', description: 'Max 8 MB images are supported.' });
     }
     if (accepted.length > 0) {
       setStagedImages((prev) => [...prev, ...accepted]);
@@ -376,7 +370,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     setIsSending(true);
     sendingRef.current = true;
 
-    // --- Send images (if any) ---
+    // --- Send photos (if any) — uploaded to GridFS in chunks ---
     if (imagesToSend.length > 0) {
       const optimistic: SupportTicket = {
         ...activeTicket,
@@ -386,7 +380,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
             _id: `temp-${Date.now()}` as any,
             sender: 'admin',
             text,
-            images: imagesToSend.map((url, i) => ({ _id: `temp-img-${i}`, url })),
+            images: imagesToSend.map((p, i) => ({ _id: `temp-img-${i}`, url: p.preview })),
             uploading: true,
             createdAt: new Date().toISOString() as any,
           } as SupportMessage,
@@ -399,19 +393,19 @@ export default function AdminSupportClient({ initialTickets }: Props) {
       setUploadProgress({ done: 0, total: imagesToSend.length });
 
       const uploadedIds: string[] = [];
-      for (const uri of imagesToSend) {
-        const up = await uploadAdminImage(id, uri);
-        if (up.success && up.imageId) {
-          uploadedIds.push(up.imageId);
+      for (const photo of imagesToSend) {
+        const up = await uploadFileInChunks(photo.file, id);
+        if (up.success && up.fileId) {
+          uploadedIds.push(up.fileId);
           setUploadProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
         } else {
-          toast({ variant: 'destructive', title: 'Could not send image', description: up.message });
+          toast({ variant: 'destructive', title: 'Could not send photo', description: up.message || 'Upload failed.' });
           break;
         }
       }
 
       if (uploadedIds.length > 0) {
-        await sendAdminImageMessage(id, uploadedIds, text);
+        await sendAdminFileMessage(id, uploadedIds, text);
       }
 
       const fresh = await getTicketForAdmin(id);
@@ -925,6 +919,12 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                         </Fragment>
                       );
                     }
+                    // Image-kind GridFS files render as a zoomable album; only
+                    // videos/documents go to FileAttachments.
+                    const imageFiles = (msg.files || [])
+                      .filter((f) => f.kind === 'image')
+                      .map((f) => ({ _id: f._id, url: `/api/support/file/${f._id}` }));
+                    const docFiles = (msg.files || []).filter((f) => f.kind !== 'image');
                     return (
                       <Fragment key={msg._id?.toString() || idx}>
                         {showDate && <DateSeparator date={msg.createdAt as any} />}
@@ -948,9 +948,12 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                                 progress={(msg as any).uploading ? uploadProgress : null}
                               />
                             )}
-                            {msg.files && msg.files.length > 0 && (
+                            {imageFiles.length > 0 && (
+                              <ChatImages images={imageFiles} onZoom={(url) => setZoomedImage(url)} />
+                            )}
+                            {docFiles.length > 0 && (
                               <FileAttachments
-                                files={msg.files}
+                                files={docFiles}
                                 uploading={(msg as any).uploading}
                                 progress={(msg as any).uploading ? fileProgress : null}
                               />
@@ -993,10 +996,10 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                 {/* Staged image previews (before sending) */}
                 {stagedImages.length > 0 && (
                   <div className="bg-[#F0F0F0] border-t px-2.5 pt-2.5 flex gap-2 overflow-x-auto">
-                    {stagedImages.map((uri, i) => (
+                    {stagedImages.map((photo, i) => (
                       <div key={i} className="relative shrink-0">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={uri} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
+                        <img src={photo.preview} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
                         <button
                           onClick={() => removeStagedImage(i)}
                           className="absolute -top-1.5 -right-1.5 bg-black/70 text-white rounded-full p-0.5"

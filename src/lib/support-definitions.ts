@@ -46,7 +46,7 @@ export interface SupportFileRef {
     filename: string;
     contentType: string;
     size: number;                       // Bytes
-    kind: 'video' | 'file';             // How the bubble should render it
+    kind: 'image' | 'video' | 'file';   // How the bubble should render it
 }
 
 // An image attached to a support message. Stored in its own collection

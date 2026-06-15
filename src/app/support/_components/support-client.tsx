@@ -13,7 +13,6 @@ import {
   Loader2,
   MessageSquarePlus,
   CheckCheck,
-  ImagePlus,
   X,
   Paperclip,
   Image as ImageIcon,
@@ -32,9 +31,6 @@ import {
   getMyTicket,
   sendUserMessage,
   markTicketReadByUser,
-  uploadSupportImage,
-  sendUserImageMessage,
-  getImageQuota,
 } from '../actions';
 import {
   getMyUploadLimit,
@@ -48,12 +44,16 @@ import {
   isSystemMessage,
   formatBytes,
   DEFAULT_UPLOAD_LIMIT_BYTES,
+  AddAttachmentButton,
+  StagedAttachmentsStrip,
+  type StagedAttachment,
 } from './support-attachments';
 import type { SupportTicket, SupportMessage } from '@/lib/support-definitions';
 import GamingIdModal from '@/components/gaming-id-modal';
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const IMAGE_LIMIT_PER_HOUR = 10;
+// A photo staged for sending: the real File (uploaded to GridFS in chunks) plus
+// a data-URI preview shown in the thumbnail strip and optimistic chat bubble.
+type StagedPhoto = { file: File; preview: string };
 
 // Read a File as a base64 data URI.
 function fileToDataUri(file: File): Promise<string> {
@@ -253,15 +253,22 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
 
   const [isSending, setIsSending] = useState(false);
 
-  // Image attachment state
-  const [stagedImages, setStagedImages] = useState<string[]>([]); // data URIs staged to send (chat)
-  const [newImages, setNewImages] = useState<string[]>([]);       // data URIs staged in the create form
-  const [imageRemaining, setImageRemaining] = useState<number>(IMAGE_LIMIT_PER_HOUR);
+  // Image attachment state. Photos now go through the GridFS upload path (so the
+  // same 10MB→250MB limit applies and they share one storage system), so we keep
+  // the real File for chunked upload alongside a data-URI `preview` for the
+  // staged thumbnail / optimistic bubble.
+  const [stagedImages, setStagedImages] = useState<StagedPhoto[]>([]); // chat compose
+  // Create-report form: any attachment type (photos/videos/files). `newOversize`
+  // remembers a too-big pick so the fallback notice can be posted after the
+  // report is created. `createAttachAttempted` flags the message box red when the
+  // user taps the (disabled) attach button before typing.
+  const [newAttachments, setNewAttachments] = useState<StagedAttachment[]>([]);
+  const [newOversize, setNewOversize] = useState<{ name: string; size: number } | null>(null);
+  const [createAttachAttempted, setCreateAttachAttempted] = useState(false);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   // Upload progress for the optimistic image message ({ done, total }).
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const newFileInputRef = useRef<HTMLInputElement>(null);
   const newTextareaRef = useRef<HTMLTextAreaElement>(null);
   // Separate hidden inputs for the new Videos / Files options.
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -339,11 +346,6 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
     setTickets(fresh);
   }, []);
 
-  const refreshQuota = useCallback(async () => {
-    const quota = await getImageQuota();
-    setImageRemaining(quota.remaining);
-  }, []);
-
   const refreshUploadLimit = useCallback(async () => {
     try {
       const { limitBytes } = await getMyUploadLimit();
@@ -353,16 +355,15 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
     }
   }, []);
 
-  // Refresh the image quota whenever a chat or the create form is open (and
-  // every minute, so the button re-enables once the rolling hour passes).
+  // Keep the upload limit fresh whenever a chat or the create form is open, so a
+  // limit the admin just granted shows up (and the menu reflects the new size).
   useEffect(() => {
     if (view === 'chat' || view === 'new') {
-      refreshQuota();
       refreshUploadLimit();
-      const id = setInterval(() => { refreshQuota(); refreshUploadLimit(); }, 60000);
+      const id = setInterval(refreshUploadLimit, 60000);
       return () => clearInterval(id);
     }
-  }, [view, activeTicket?._id, refreshQuota, refreshUploadLimit]);
+  }, [view, activeTicket?._id, refreshUploadLimit]);
 
   // While viewing the report list, poll so admin replies / unread badges
   // show up live without the user manually refreshing the page.
@@ -438,27 +439,34 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
 
     const ticketId = result.ticketId;
 
-    // Upload any images attached to the create form, then post them.
-    const imagesToSend = [...newImages];
-    if (imagesToSend.length > 0) {
+    // Upload any attachments (photos/videos/files) via GridFS, then post them.
+    const toSend = [...newAttachments];
+    if (toSend.length > 0) {
       const uploadedIds: string[] = [];
-      for (const uri of imagesToSend) {
-        const up = await uploadSupportImage(ticketId, uri);
-        if (up.success && up.imageId) {
-          uploadedIds.push(up.imageId);
+      for (const att of toSend) {
+        const up = await uploadFileInChunks(att.file, ticketId);
+        if (up.success && up.fileId) {
+          uploadedIds.push(up.fileId);
         } else {
-          toast({ variant: 'destructive', title: 'Could not send image', description: up.message });
+          toast({ variant: 'destructive', title: 'Could not send attachment', description: up.message || 'Upload failed.' });
           break;
         }
       }
       if (uploadedIds.length > 0) {
-        await sendUserImageMessage(ticketId, uploadedIds, '');
+        await sendUserFileMessage(ticketId, uploadedIds, '');
       }
-      await refreshQuota();
+    }
+
+    // A too-big pick doesn't block the report — it's still created, and we post
+    // the "limit reached / higher limit requested" fallback notice into it.
+    if (newOversize) {
+      await requestUploadLimitIncrease(ticketId, newOversize.name, newOversize.size);
     }
 
     setNewMessage('');
-    setNewImages([]);
+    setNewAttachments([]);
+    setNewOversize(null);
+    setCreateAttachAttempted(false);
     setIsSending(false);
 
     const fresh = await getMyTicket(ticketId);
@@ -471,112 +479,54 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
     }
   };
 
-  // Validate + stage images chosen in the create-report form.
-  const handleNewFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = '';
-    if (files.length === 0) return;
-
-    const capacity = imageRemaining - newImages.length;
-    if (capacity <= 0) {
-      toast({ variant: 'destructive', title: 'Image limit reached', description: 'You can only send 10 images in every hour.' });
-      return;
-    }
-
-    const accepted: string[] = [];
-    let rejectedForSize = false;
-    let rejectedForLimit = false;
-    for (const file of files) {
-      if (!file.type.startsWith('image/')) continue;
-      if (file.size > MAX_IMAGE_BYTES) {
-        rejectedForSize = true;
-        continue;
-      }
-      if (accepted.length >= capacity) {
-        rejectedForLimit = true;
-        break;
-      }
-      try {
-        accepted.push(await fileToDataUri(file));
-      } catch {
-        /* ignore */
-      }
-    }
-    if (rejectedForSize) {
-      toast({ variant: 'destructive', title: 'Image too large', description: 'Max 8 MB images are supported.' });
-    }
-    if (rejectedForLimit) {
-      toast({ variant: 'destructive', title: 'Image limit reached', description: 'You can only send 10 images in every hour.' });
-    }
-    if (accepted.length > 0) setNewImages((prev) => [...prev, ...accepted]);
-  };
-
-  // Open the device file picker (or warn if the hourly image limit is reached).
+  // Open the device photo picker.
   const handleAttachClick = () => {
-    if (imageRemaining <= 0) {
-      toast({
-        variant: 'destructive',
-        title: 'Image limit reached',
-        description: 'You can only send 10 images in every hour.',
-      });
-      return;
-    }
     fileInputRef.current?.click();
   };
 
-  // Validate + stage the chosen images (8MB cap + hourly limit).
+  // Validate + stage the chosen photos (size-checked against the upload limit).
+  // Any photo over the limit is dropped and triggers the same "limit reached /
+  // higher limit requested" system notice as videos & files.
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     e.target.value = ''; // allow re-selecting the same file later
     if (files.length === 0) return;
 
-    const capacity = imageRemaining - stagedImages.length;
-    if (capacity <= 0) {
-      toast({
-        variant: 'destructive',
-        title: 'Image limit reached',
-        description: 'You can only send 10 images in every hour.',
-      });
-      return;
-    }
-
-    const accepted: string[] = [];
-    let rejectedForSize = false;
-    let rejectedForLimit = false;
+    const accepted: StagedPhoto[] = [];
+    let oversize: File | null = null;
 
     for (const file of files) {
       if (!file.type.startsWith('image/')) continue;
-      if (file.size > MAX_IMAGE_BYTES) {
-        rejectedForSize = true;
+      if (file.size > uploadLimitBytes) {
+        if (!oversize) oversize = file;
         continue;
       }
-      if (accepted.length >= capacity) {
-        rejectedForLimit = true;
-        break;
-      }
       try {
-        accepted.push(await fileToDataUri(file));
+        accepted.push({ file, preview: await fileToDataUri(file) });
       } catch {
         /* ignore unreadable file */
       }
     }
 
-    if (rejectedForSize) {
-      toast({
-        variant: 'destructive',
-        title: 'Image too large',
-        description: 'Max 8 MB images are supported.',
-      });
-    }
-    if (rejectedForLimit) {
-      toast({
-        variant: 'destructive',
-        title: 'Image limit reached',
-        description: 'You can only send 10 images in every hour.',
-      });
-    }
     if (accepted.length > 0) {
       setStagedImages((prev) => [...prev, ...accepted]);
+    }
+
+    // An over-limit photo cancels (like videos/files) and requests a bigger limit.
+    if (oversize && activeTicket) {
+      toast({
+        variant: 'destructive',
+        title: 'Upload limit reached',
+        description: `This photo is ${formatBytes(oversize.size)}. Your limit is ${formatBytes(uploadLimitBytes)}. A higher limit has been requested.`,
+      });
+      const ticketId = activeTicket._id.toString();
+      const res = await requestUploadLimitIncrease(ticketId, oversize.name, oversize.size);
+      if (!res.success) {
+        toast({ variant: 'destructive', title: 'Error', description: res.message });
+      }
+      const fresh = await getMyTicket(ticketId);
+      if (fresh) setActiveTicket(fresh);
+      refreshList();
     }
   };
 
@@ -595,7 +545,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
     setIsSending(true);
     sendingRef.current = true;
 
-    // --- Send images (if any) ---
+    // --- Send photos (if any) — uploaded to GridFS in chunks ---
     if (imagesToSend.length > 0) {
       const tempId = `temp-${Date.now()}`;
       // Optimistically show the album immediately (stays visible while uploading).
@@ -607,7 +557,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
             _id: tempId as any,
             sender: 'user',
             text,
-            images: imagesToSend.map((url, i) => ({ _id: `temp-img-${i}`, url })),
+            images: imagesToSend.map((p, i) => ({ _id: `temp-img-${i}`, url: p.preview })),
             uploading: true,
             createdAt: new Date().toISOString() as any,
           } as SupportMessage,
@@ -619,27 +569,30 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
       setStagedImages([]);
       setUploadProgress({ done: 0, total: imagesToSend.length });
 
-      // Upload each image one at a time, then post a single message.
+      // Upload each photo (in chunks), then post a single album message.
       const uploadedIds: string[] = [];
-      for (const uri of imagesToSend) {
-        const up = await uploadSupportImage(ticketId, uri);
-        if (up.success && up.imageId) {
-          uploadedIds.push(up.imageId);
+      for (const photo of imagesToSend) {
+        const up = await uploadFileInChunks(photo.file, ticketId);
+        if (up.success && up.fileId) {
+          uploadedIds.push(up.fileId);
           setUploadProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
+        } else if (up.code === 'LIMIT_EXCEEDED') {
+          await requestUploadLimitIncrease(ticketId, photo.file.name, photo.file.size);
+          toast({ variant: 'destructive', title: 'Upload limit reached', description: 'A higher limit has been requested.' });
+          break;
         } else {
-          toast({ variant: 'destructive', title: 'Could not send image', description: up.message });
-          break; // stop on the first failure (e.g. hit the hourly limit)
+          toast({ variant: 'destructive', title: 'Could not send photo', description: up.message || 'Upload failed.' });
+          break;
         }
       }
 
       if (uploadedIds.length > 0) {
-        await sendUserImageMessage(ticketId, uploadedIds, text);
+        await sendUserFileMessage(ticketId, uploadedIds, text);
       }
 
       const fresh = await getMyTicket(ticketId);
       if (fresh) setActiveTicket(fresh);
       setUploadProgress(null);
-      await refreshQuota();
       refreshList();
       sendingRef.current = false;
       setIsSending(false);
@@ -829,6 +782,13 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                   </Fragment>
                 );
               }
+
+              // Image-kind GridFS files render as a zoomable album (reusing the
+              // existing image UI); only videos/documents go to FileAttachments.
+              const imageFiles = (msg.files || [])
+                .filter((f) => f.kind === 'image')
+                .map((f) => ({ _id: f._id, url: `/api/support/file/${f._id}` }));
+              const docFiles = (msg.files || []).filter((f) => f.kind !== 'image');
               return (
                 <Fragment key={msg._id?.toString() || idx}>
                   {showDate && <DateSeparator date={msg.createdAt as any} />}
@@ -855,9 +815,12 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                           progress={(msg as any).uploading ? uploadProgress : null}
                         />
                       )}
-                      {msg.files && msg.files.length > 0 && (
+                      {imageFiles.length > 0 && (
+                        <ChatImages images={imageFiles} onZoom={(url) => setZoomedImage(url)} />
+                      )}
+                      {docFiles.length > 0 && (
                         <FileAttachments
-                          files={msg.files}
+                          files={docFiles}
                           uploading={(msg as any).uploading}
                           progress={(msg as any).uploading ? fileProgress : null}
                         />
@@ -898,10 +861,10 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
           {/* Staged image previews (before sending) */}
           {stagedImages.length > 0 && (
             <div className="bg-[#F0F0F0] border-t px-2.5 pt-2.5 flex gap-2 overflow-x-auto">
-              {stagedImages.map((uri, i) => (
+              {stagedImages.map((photo, i) => (
                 <div key={i} className="relative shrink-0">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={uri} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
+                  <img src={photo.preview} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
                   <button
                     onClick={() => removeStagedImage(i)}
                     className="absolute -top-1.5 -right-1.5 bg-black/70 text-white rounded-full p-0.5"
@@ -957,7 +920,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                 <DropdownMenuItem onClick={handleAttachClick}>
                   <ImageIcon className="h-4 w-4 mr-2 text-violet-600" />
                   Photos
-                  <span className="ml-auto pl-3 text-[10px] text-muted-foreground">8 MB</span>
+                  <span className="ml-auto pl-3 text-[10px] text-muted-foreground">{formatBytes(uploadLimitBytes)}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => videoInputRef.current?.click()}>
                   <Film className="h-4 w-4 mr-2 text-rose-600" />
@@ -1022,7 +985,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
   if (view === 'new') {
     return (
       <div className="container mx-auto px-6 py-10 max-w-xl">
-        <Button variant="ghost" className="mb-4 -ml-2" onClick={() => { setNewImages([]); setView('list'); }}>
+        <Button variant="ghost" className="mb-4 -ml-2" onClick={() => { setNewAttachments([]); setNewOversize(null); setCreateAttachAttempted(false); setView('list'); }}>
           <ArrowLeft className="h-4 w-4 mr-2" /> Back
         </Button>
         <Card className="overflow-hidden">
@@ -1050,60 +1013,59 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                 ref={newTextareaRef}
                 autoFocus
                 value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
+                onChange={(e) => {
+                  setNewMessage(e.target.value);
+                  if (e.target.value.trim()) setCreateAttachAttempted(false);
+                }}
                 placeholder="Please describe your issue in as much detail as possible — include your order, payment UTR, or Free Fire ID if related. The more details you share, the faster we can help you."
                 rows={7}
                 maxLength={2000}
-                className="resize-none text-[15px] leading-relaxed"
+                className={`resize-none text-[15px] leading-relaxed ${
+                  createAttachAttempted && !newMessage.trim()
+                    ? 'border-red-500 focus-visible:ring-red-500'
+                    : ''
+                }`}
               />
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Be clear and specific so we can resolve it quickly.</span>
-                <span>{newMessage.length}/2000</span>
+              <div className="flex justify-between text-xs">
+                <span className={createAttachAttempted && !newMessage.trim() ? 'text-red-500 font-medium' : 'text-muted-foreground'}>
+                  {createAttachAttempted && !newMessage.trim()
+                    ? 'Please describe your issue first, then add attachments.'
+                    : 'Be clear and specific so we can resolve it quickly.'}
+                </span>
+                <span className="text-muted-foreground">{newMessage.length}/2000</span>
               </div>
             </div>
 
-            {/* Attach images */}
+            {/* Attach photos / videos / files */}
             <div className="space-y-2">
-              <input
-                ref={newFileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={handleNewFileSelect}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  if (imageRemaining <= 0) {
-                    toast({ variant: 'destructive', title: 'Image limit reached', description: 'You can only send 10 images in every hour.' });
-                    return;
-                  }
-                  newFileInputRef.current?.click();
+              <AddAttachmentButton
+                limitBytes={uploadLimitBytes}
+                disabled={!newMessage.trim()}
+                onBlocked={() => {
+                  setCreateAttachAttempted(true);
+                  newTextareaRef.current?.focus();
+                  toast({ variant: 'destructive', title: 'Describe your issue first', description: 'Please write your message before adding attachments.' });
                 }}
-                className={`w-full ${imageRemaining <= 0 ? 'opacity-40' : ''}`}
-              >
-                <ImagePlus className="h-4 w-4 mr-2" />
-                Attach Images
-              </Button>
-              {newImages.length > 0 && (
-                <div className="flex gap-2 flex-wrap">
-                  {newImages.map((uri, i) => (
-                    <div key={i} className="relative">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={uri} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
-                      <button
-                        type="button"
-                        onClick={() => setNewImages((prev) => prev.filter((_, idx) => idx !== i))}
-                        className="absolute -top-1.5 -right-1.5 bg-black/70 text-white rounded-full p-0.5"
-                        aria-label="Remove image"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                onPick={(accepted, oversize) => {
+                  if (accepted.length > 0) setNewAttachments((prev) => [...prev, ...accepted]);
+                  if (oversize) {
+                    setNewOversize(oversize);
+                    toast({
+                      variant: 'destructive',
+                      title: 'File too large',
+                      description: `"${oversize.name}" is ${formatBytes(oversize.size)} (limit ${formatBytes(uploadLimitBytes)}). The report will still be created and a higher limit requested.`,
+                    });
+                  }
+                }}
+              />
+              <StagedAttachmentsStrip
+                items={newAttachments}
+                onRemove={(id) => setNewAttachments((prev) => prev.filter((a) => a.id !== id))}
+              />
+              {newOversize && (
+                <p className="text-[11px] text-amber-600">
+                  “{newOversize.name}” ({formatBytes(newOversize.size)}) exceeds your {formatBytes(uploadLimitBytes)} limit — the report will be created and a higher limit requested.
+                </p>
               )}
             </div>
 

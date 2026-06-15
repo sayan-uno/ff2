@@ -1,6 +1,24 @@
 'use client';
 
-import { FileText, Download, Film, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { useRef } from 'react';
+import {
+  FileText,
+  Download,
+  Film,
+  Loader2,
+  AlertTriangle,
+  CheckCircle2,
+  Paperclip,
+  Image as ImageIcon,
+  X,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { SupportFileRef, SupportMessage } from '@/lib/support-definitions';
 
 // Browser uploads in 4MB pieces to stay under the platform request-size cap.
@@ -204,4 +222,183 @@ function UploadBar({ progress }: { progress?: number | null }) {
 // True when a message is a system notice (rendered centered, not as a bubble).
 export function isSystemMessage(msg: SupportMessage): boolean {
     return (msg as any).kind === 'system';
+}
+
+// ---------------------------------------------------------------------------
+// Create-form attachment picker (used by the support "Create Report" form and
+// the Refund Request page). Lets the user attach Photos / Videos / Files before
+// the report exists, mirroring the inbox menu.
+// ---------------------------------------------------------------------------
+
+// A file staged in a create form before the report (and its upload) exist.
+export type StagedAttachment = {
+    id: string;
+    file: File;
+    kind: 'image' | 'video' | 'file';
+    preview?: string;   // data-URI thumbnail, images only
+};
+
+export function fileKind(file: File): 'image' | 'video' | 'file' {
+    const t = (file.type || '').toLowerCase();
+    if (t.startsWith('image/')) return 'image';
+    if (t.startsWith('video/')) return 'video';
+    return 'file';
+}
+
+function readAsDataUri(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+// Turn picked files into staged attachments, generating thumbnails for images and
+// splitting out anything over the limit (so the caller can post the fallback
+// "limit reached" notice when the report is created).
+export async function stageFiles(
+    files: File[],
+    limitBytes: number
+): Promise<{ accepted: StagedAttachment[]; oversize: { name: string; size: number } | null }> {
+    const accepted: StagedAttachment[] = [];
+    let oversize: { name: string; size: number } | null = null;
+    for (const file of files) {
+        if (file.size > limitBytes) {
+            if (!oversize) oversize = { name: file.name, size: file.size };
+            continue;
+        }
+        const kind = fileKind(file);
+        let preview: string | undefined;
+        if (kind === 'image') {
+            try { preview = await readAsDataUri(file); } catch { /* ignore */ }
+        }
+        accepted.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            file,
+            kind,
+            preview,
+        });
+    }
+    return { accepted, oversize };
+}
+
+// The full-width "Add Attachment" button + Photos/Videos/Files menu. When
+// `disabled` it looks dimmed and a click calls `onBlocked` (used to flag the
+// required fields red) instead of opening the menu.
+export function AddAttachmentButton({
+    disabled,
+    onBlocked,
+    onPick,
+    limitBytes,
+    label = 'Add Attachment',
+}: {
+    disabled?: boolean;
+    onBlocked?: () => void;
+    onPick: (accepted: StagedAttachment[], oversize: { name: string; size: number } | null) => void;
+    limitBytes: number;
+    label?: string;
+}) {
+    const imgRef = useRef<HTMLInputElement>(null);
+    const vidRef = useRef<HTMLInputElement>(null);
+    const docRef = useRef<HTMLInputElement>(null);
+
+    const handle = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = '';
+        if (files.length === 0) return;
+        const { accepted, oversize } = await stageFiles(files, limitBytes);
+        onPick(accepted, oversize);
+    };
+
+    const inputs = (
+        <>
+            <input ref={imgRef} type="file" accept="image/*" multiple className="hidden" onChange={handle} />
+            <input ref={vidRef} type="file" accept="video/*" multiple className="hidden" onChange={handle} />
+            <input ref={docRef} type="file" multiple className="hidden" onChange={handle} />
+        </>
+    );
+
+    if (disabled) {
+        return (
+            <>
+                {inputs}
+                <Button type="button" variant="outline" className="w-full opacity-50" onClick={() => onBlocked?.()}>
+                    <Paperclip className="h-4 w-4 mr-2" /> {label}
+                </Button>
+            </>
+        );
+    }
+
+    return (
+        <>
+            {inputs}
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="outline" className="w-full">
+                        <Paperclip className="h-4 w-4 mr-2" /> {label}
+                    </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                    <DropdownMenuItem onClick={() => imgRef.current?.click()}>
+                        <ImageIcon className="h-4 w-4 mr-2 text-violet-600" />
+                        Photos
+                        <span className="ml-auto pl-3 text-[10px] text-muted-foreground">{formatBytes(limitBytes)}</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => vidRef.current?.click()}>
+                        <Film className="h-4 w-4 mr-2 text-rose-600" />
+                        Videos
+                        <span className="ml-auto pl-3 text-[10px] text-muted-foreground">{formatBytes(limitBytes)}</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => docRef.current?.click()}>
+                        <FileText className="h-4 w-4 mr-2 text-sky-600" />
+                        Files
+                        <span className="ml-auto pl-3 text-[10px] text-muted-foreground">{formatBytes(limitBytes)}</span>
+                    </DropdownMenuItem>
+                </DropdownMenuContent>
+            </DropdownMenu>
+        </>
+    );
+}
+
+// Thumbnail strip for staged attachments (images show a preview; videos/files
+// show an icon tile with the filename), each with a remove button.
+export function StagedAttachmentsStrip({
+    items,
+    onRemove,
+}: {
+    items: StagedAttachment[];
+    onRemove: (id: string) => void;
+}) {
+    if (!items || items.length === 0) return null;
+    return (
+        <div className="flex gap-2 flex-wrap">
+            {items.map((a) => (
+                <div key={a.id} className="relative">
+                    {a.kind === 'image' && a.preview ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={a.preview} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
+                    ) : (
+                        <div className="h-16 w-24 rounded-md border bg-muted/40 flex flex-col items-center justify-center px-1 text-center">
+                            {a.kind === 'video' ? (
+                                <Film className="h-5 w-5 text-rose-600" />
+                            ) : (
+                                <FileText className="h-5 w-5 text-sky-600" />
+                            )}
+                            <span className="mt-0.5 w-full truncate text-[9px] text-muted-foreground">{a.file.name}</span>
+                            <span className="text-[9px] text-muted-foreground">{formatBytes(a.file.size)}</span>
+                        </div>
+                    )}
+                    <button
+                        type="button"
+                        onClick={() => onRemove(a.id)}
+                        className="absolute -top-1.5 -right-1.5 bg-black/70 text-white rounded-full p-0.5"
+                        aria-label="Remove attachment"
+                    >
+                        <X className="h-3.5 w-3.5" />
+                    </button>
+                </div>
+            ))}
+        </div>
+    );
 }

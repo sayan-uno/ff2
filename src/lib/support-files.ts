@@ -39,10 +39,13 @@ export function getSupportBucket(db: MongoDbWithClient): GridFSBucket {
     return new GridFSBucket(db, { bucketName: SUPPORT_FILES_BUCKET });
 }
 
-// Classify an attachment from its MIME type. Images never reach this path
-// (they use the existing inline flow), so we only distinguish video vs file.
-export function classifyKind(contentType: string): 'video' | 'file' {
-    return (contentType || '').toLowerCase().startsWith('video/') ? 'video' : 'file';
+// Classify an attachment from its MIME type so the chat can render it correctly:
+// images as a zoomable album, videos with a player, everything else as a file card.
+export function classifyKind(contentType: string): 'image' | 'video' | 'file' {
+    const ct = (contentType || '').toLowerCase();
+    if (ct.startsWith('image/')) return 'image';
+    if (ct.startsWith('video/')) return 'video';
+    return 'file';
 }
 
 // The metadata we stash on each GridFS file so we can authorise access and
@@ -51,7 +54,7 @@ export interface SupportFileMetadata {
     ticketId: string;
     gamingId: string;
     uploadedBy: 'user' | 'admin';
-    kind: 'video' | 'file';
+    kind: 'image' | 'video' | 'file';
     contentType: string;
 }
 

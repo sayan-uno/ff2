@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,22 +9,21 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { getUserData } from '@/app/actions';
-import { createTicket, uploadSupportImage, sendUserImageMessage, getImageQuota } from '@/app/support/actions';
-import { Loader2, ImagePlus, X } from 'lucide-react';
+import { createTicket } from '@/app/support/actions';
+import { getMyUploadLimit, sendUserFileMessage, requestUploadLimitIncrease } from '@/app/support/file-actions';
+import {
+  uploadFileInChunks,
+  AddAttachmentButton,
+  StagedAttachmentsStrip,
+  formatBytes,
+  DEFAULT_UPLOAD_LIMIT_BYTES,
+  type StagedAttachment,
+} from '@/app/support/_components/support-attachments';
+import { Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import GamingIdModal from '@/components/gaming-id-modal';
 import RefundStatusFloating from '@/components/refund-status-floating';
-
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-
-function fileToDataUri(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
 
 export default function RefundRequestPage() {
   const [transactionId, setTransactionId] = useState('');
@@ -33,11 +32,16 @@ export default function RefundRequestPage() {
   const [message, setMessage] = useState('');
   const [isLoadingId, setIsLoadingId] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [images, setImages] = useState<string[]>([]);
-  const [imageRemaining, setImageRemaining] = useState(10);
+  // Attachments of any type (photos/videos/files). `oversize` remembers a too-big
+  // pick so the fallback notice can be posted after the report is created.
+  const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
+  const [oversize, setOversize] = useState<{ name: string; size: number } | null>(null);
+  const [uploadLimitBytes, setUploadLimitBytes] = useState(DEFAULT_UPLOAD_LIMIT_BYTES);
+  // True once the user taps the (disabled) attach button before filling the form,
+  // which flags the still-empty required fields red.
+  const [attachAttempted, setAttachAttempted] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const { toast } = useToast();
 
@@ -48,8 +52,12 @@ export default function RefundRequestPage() {
       if (user) {
         setGamingId(user.visualGamingId || user.gamingId);
         setIsLoggedIn(true);
-        const quota = await getImageQuota();
-        setImageRemaining(quota.remaining);
+        try {
+          const { limitBytes } = await getMyUploadLimit();
+          setUploadLimitBytes(limitBytes);
+        } catch {
+          /* keep default 10MB on failure */
+        }
       } else {
         // Not logged in — show the same Gaming ID login popup as the home page.
         setShowLogin(true);
@@ -59,44 +67,7 @@ export default function RefundRequestPage() {
     fetchUserId();
   }, []);
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = '';
-    if (files.length === 0) return;
-
-    const capacity = imageRemaining - images.length;
-    if (capacity <= 0) {
-      toast({ variant: 'destructive', title: 'Image limit reached', description: 'You can only send 10 images in every hour.' });
-      return;
-    }
-
-    const accepted: string[] = [];
-    let rejectedForSize = false;
-    let rejectedForLimit = false;
-    for (const file of files) {
-      if (!file.type.startsWith('image/')) continue;
-      if (file.size > MAX_IMAGE_BYTES) {
-        rejectedForSize = true;
-        continue;
-      }
-      if (accepted.length >= capacity) {
-        rejectedForLimit = true;
-        break;
-      }
-      try {
-        accepted.push(await fileToDataUri(file));
-      } catch {
-        /* ignore */
-      }
-    }
-    if (rejectedForSize) {
-      toast({ variant: 'destructive', title: 'Image too large', description: 'Max 8 MB images are supported.' });
-    }
-    if (rejectedForLimit) {
-      toast({ variant: 'destructive', title: 'Image limit reached', description: 'You can only send 10 images in every hour.' });
-    }
-    if (accepted.length > 0) setImages((prev) => [...prev, ...accepted]);
-  };
+  const allRequiredFilled = Boolean(gamingId && contactNumber && transactionId && message);
 
   const handleContactNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -136,22 +107,28 @@ ${message}`;
       return;
     }
 
-    // Upload any attached images, then post them to the new report.
-    const imagesToSend = [...images];
-    if (imagesToSend.length > 0) {
+    // Upload any attachments (photos/videos/files) via GridFS, then post them.
+    const toSend = [...attachments];
+    if (toSend.length > 0) {
       const uploadedIds: string[] = [];
-      for (const uri of imagesToSend) {
-        const up = await uploadSupportImage(result.ticketId, uri);
-        if (up.success && up.imageId) {
-          uploadedIds.push(up.imageId);
+      for (const att of toSend) {
+        const up = await uploadFileInChunks(att.file, result.ticketId);
+        if (up.success && up.fileId) {
+          uploadedIds.push(up.fileId);
         } else {
-          toast({ variant: 'destructive', title: 'Could not send image', description: up.message });
+          toast({ variant: 'destructive', title: 'Could not send attachment', description: up.message || 'Upload failed.' });
           break;
         }
       }
       if (uploadedIds.length > 0) {
-        await sendUserImageMessage(result.ticketId, uploadedIds, '');
+        await sendUserFileMessage(result.ticketId, uploadedIds, '');
       }
+    }
+
+    // A too-big pick doesn't block the request — the report is still created and
+    // we post the "limit reached / higher limit requested" fallback notice.
+    if (oversize) {
+      await requestUploadLimitIncrease(result.ticketId, oversize.name, oversize.size);
     }
 
     setIsSubmitting(false);
@@ -164,7 +141,9 @@ ${message}`;
     setTransactionId('');
     setContactNumber('');
     setMessage('');
-    setImages([]);
+    setAttachments([]);
+    setOversize(null);
+    setAttachAttempted(false);
 
     // Open the new report's chat (inbox) directly; the chat's back button
     // then returns the user to the support page.
@@ -191,6 +170,7 @@ ${message}`;
               onChange={(e) => setGamingId(e.target.value.replace(/\D/g, ''))}
               type="tel"
               pattern="[0-9]*"
+              className={cn(attachAttempted && !gamingId && 'border-red-500 focus-visible:ring-red-500')}
             />
           </div>
           <div className="space-y-2">
@@ -202,6 +182,7 @@ ${message}`;
               onChange={handleContactNumberChange}
               type="tel"
               pattern="[0-9]*"
+              className={cn(attachAttempted && !contactNumber && 'border-red-500 focus-visible:ring-red-500')}
             />
           </div>
           <div className="space-y-2">
@@ -211,6 +192,7 @@ ${message}`;
               placeholder="Enter your transaction ID"
               value={transactionId}
               onChange={(e) => setTransactionId(e.target.value)}
+              className={cn(attachAttempted && !transactionId && 'border-red-500 focus-visible:ring-red-500')}
             />
           </div>
           <div className="space-y-2">
@@ -221,51 +203,45 @@ ${message}`;
               rows={5}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
+              className={cn(attachAttempted && !message && 'border-red-500 focus-visible:ring-red-500')}
             />
           </div>
           <div className="space-y-2">
-            <Label>Attach Images (optional)</Label>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={handleFileSelect}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (imageRemaining <= 0) {
-                  toast({ variant: 'destructive', title: 'Image limit reached', description: 'You can only send 10 images in every hour.' });
-                  return;
-                }
-                fileInputRef.current?.click();
+            <Label>Add Attachment (optional)</Label>
+            <AddAttachmentButton
+              limitBytes={uploadLimitBytes}
+              disabled={!allRequiredFilled}
+              onBlocked={() => {
+                setAttachAttempted(true);
+                toast({
+                  variant: 'destructive',
+                  title: 'Fill the required fields first',
+                  description: 'Please complete Gaming ID, Contact Number, Transaction ID and the reason before adding an attachment.',
+                });
               }}
-              className={`w-full ${imageRemaining <= 0 ? 'opacity-40' : ''}`}
-            >
-              <ImagePlus className="h-4 w-4 mr-2" />
-              Add Images
-            </Button>
-            <p className="text-xs text-muted-foreground">Max 8 MB per image, up to 10 images per hour.</p>
-            {images.length > 0 && (
-              <div className="flex gap-2 flex-wrap">
-                {images.map((uri, i) => (
-                  <div key={i} className="relative">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={uri} alt="preview" className="h-16 w-16 object-cover rounded-md border" />
-                    <button
-                      type="button"
-                      onClick={() => setImages((prev) => prev.filter((_, idx) => idx !== i))}
-                      className="absolute -top-1.5 -right-1.5 bg-black/70 text-white rounded-full p-0.5"
-                      aria-label="Remove image"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+              onPick={(accepted, over) => {
+                if (accepted.length > 0) setAttachments((prev) => [...prev, ...accepted]);
+                if (over) {
+                  setOversize(over);
+                  toast({
+                    variant: 'destructive',
+                    title: 'File too large',
+                    description: `"${over.name}" is ${formatBytes(over.size)} (limit ${formatBytes(uploadLimitBytes)}). Your request will still be submitted and a higher limit requested.`,
+                  });
+                }
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Photos, videos or files up to {formatBytes(uploadLimitBytes)} each.
+            </p>
+            <StagedAttachmentsStrip
+              items={attachments}
+              onRemove={(id) => setAttachments((prev) => prev.filter((a) => a.id !== id))}
+            />
+            {oversize && (
+              <p className="text-[11px] text-amber-600">
+                “{oversize.name}” ({formatBytes(oversize.size)}) exceeds your {formatBytes(uploadLimitBytes)} limit — your request will be submitted and a higher limit requested.
+              </p>
             )}
           </div>
         </CardContent>
