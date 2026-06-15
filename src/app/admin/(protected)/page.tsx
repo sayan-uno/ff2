@@ -1,7 +1,7 @@
-import { OrderList } from './_components/order-list';
+import { PendingOrderList } from './_components/pending-order-list';
 import { getOrdersForAdmin } from '@/app/actions';
 
-const status = ['Processing'];
+const status: ('Processing')[] = ['Processing'];
 
 export default async function AdminHomePage({
   searchParams,
@@ -15,11 +15,8 @@ export default async function AdminHomePage({
   const { orders, hasMore, totalOrders } = await getOrdersForAdmin(page, sort, search, status);
 
   return (
-    <OrderList
+    <PendingOrderList
       initialOrders={orders}
-      title="Pending Orders"
-      status={status}
-      showActions={true}
       initialHasMore={hasMore}
       totalOrders={totalOrders}
     />

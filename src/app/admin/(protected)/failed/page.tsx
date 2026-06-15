@@ -12,8 +12,10 @@ export default async function AdminFailedPage({
   const page = typeof searchParams.page === 'string' ? Number(searchParams.page) : 1;
   const sort = typeof searchParams.sort === 'string' ? searchParams.sort : 'asc';
   const search = typeof searchParams.search === 'string' ? searchParams.search : '';
+  const startDate = typeof searchParams.startDate === 'string' ? searchParams.startDate : '';
+  const endDate = typeof searchParams.endDate === 'string' ? searchParams.endDate : '';
 
-  const { orders, hasMore } = await getOrdersForAdmin(page, sort, search, status);
+  const { orders, hasMore, totalOrders } = await getOrdersForAdmin(page, sort, search, status, startDate, endDate);
 
   return (
     <OrderList
@@ -21,6 +23,8 @@ export default async function AdminFailedPage({
       title="Failed Orders"
       status={status}
       initialHasMore={hasMore}
+      totalOrders={totalOrders}
+      enableManagement
     />
   );
 }

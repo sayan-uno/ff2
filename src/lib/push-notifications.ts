@@ -32,6 +32,7 @@ interface PushNotificationPayload {
     title: string;
     body: string;
     imageUrl?: string;
+    link?: string; // Optional click-through URL; defaults to the site base URL
 }
 
 interface MulticastPushNotificationPayload {
@@ -42,14 +43,15 @@ interface MulticastPushNotificationPayload {
 }
 
 // Helper to build the message payload, sending only 'data'
-const buildDataPayload = (payload: { title: string; body: string; imageUrl?: string; }) => {
+const buildDataPayload = (payload: { title: string; body: string; imageUrl?: string; link?: string; }) => {
     return {
         data: {
             title: payload.title,
             body: payload.body,
             ...(payload.imageUrl && { image: payload.imageUrl }),
-            // Add the link here so the service worker can use it
-            link: process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002'
+            // Add the link here so the service worker can use it. Callers may pass a
+            // specific link (e.g. the /support page); otherwise fall back to the base URL.
+            link: payload.link || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002'
         }
     };
 };

@@ -114,10 +114,35 @@ export interface Notification {
     gamingId: string; // The recipient's gaming ID
     senderGamingId?: string; // The sender's gaming ID, for gift history
     message: string;
+    // Optional rich, self-contained HTML body (server-generated, trusted) rendered
+    // in the notification bell instead of the plain `message`. `message` is kept as
+    // a plain-text fallback for push notifications and clients that don't render HTML.
+    html?: string;
     imageUrl?: string;
     isRead: boolean;
     createdAt: Date;
     isPopup?: boolean;
+    broadcastId?: string; // Links to a BroadcastNotification if this was part of a broadcast
+    pushDelivered?: boolean; // True if Firebase push notification was successfully sent
+    // Tagging for support-reply notifications so they can be precisely removed
+    // from the bell once the user has actually seen the reply (keeps the bell
+    // history from piling up). Absent on all other notification kinds.
+    type?: string;            // e.g. 'support_reply'
+    supportTicketId?: string; // The report this reply notification belongs to
+}
+
+export interface BroadcastNotification {
+    _id: ObjectId;
+    message: string;
+    imageUrl?: string;
+    isPopup?: boolean;
+    createdAt: Date;
+    totalUsers: number;        // How many users were targeted
+    pushTotal: number;         // How many users had FCM tokens (actual push targets)
+    pushSent: number;          // How many push notifications succeeded
+    pushFailed: number;        // How many push notifications failed
+    status: 'sending' | 'completed' | 'failed';
+    removedTokenGamingIds?: string[]; // Gaming IDs of users whose FCM tokens were invalid and removed
 }
 
 export interface Event {

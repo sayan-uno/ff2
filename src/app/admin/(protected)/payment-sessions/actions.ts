@@ -11,6 +11,40 @@ import { sendPushNotification } from '@/lib/push-notifications';
 
 const PAGE_SIZE = 10;
 
+// India Standard Time is a fixed UTC+05:30 offset (no daylight saving). The
+// admin date/time pickers send a wall-clock value with no timezone (e.g.
+// "2026-06-14T15:30") entered in IST. We pin the IST offset here so it is
+// converted to the correct UTC instant before querying (createdAt is UTC).
+function istLocalToUtcDate(local: string): Date | null {
+    if (!local) return null;
+    const withSeconds = local.length === 16 ? `${local}:00` : local;
+    const date = new Date(`${withSeconds}+05:30`);
+    return isNaN(date.getTime()) ? null : date;
+}
+
+// Builds the query shared by the listing, count and range-deletion so that
+// "what you see" and "what gets deleted" always match. The time frame filters
+// on `createdAt` (when the payment session was opened).
+function buildPaymentSessionsQuery(search: string, startDate?: string, endDate?: string) {
+    const query: any = {};
+    if (search) {
+        query.$or = [
+            { gamingId: { $regex: search, $options: 'i' } },
+            { productName: { $regex: search, $options: 'i' } }
+        ];
+    }
+
+    const start = istLocalToUtcDate(startDate || '');
+    const end = istLocalToUtcDate(endDate || '');
+    if (start || end) {
+        query.createdAt = {};
+        if (start) query.createdAt.$gte = start;
+        if (end) query.createdAt.$lte = end;
+    }
+
+    return query;
+}
+
 async function expireOldLocks() {
     try {
         const db = await connectToDatabase();
@@ -28,7 +62,7 @@ async function expireOldLocks() {
     }
 }
 
-export async function getPaymentSessions(page: number, search: string) {
+export async function getPaymentSessions(page: number, search: string, startDate?: string, endDate?: string) {
     noStore();
     const isAdmin = await isAdminAuthenticated();
     if (!isAdmin) {
@@ -42,14 +76,8 @@ export async function getPaymentSessions(page: number, search: string) {
         const db = await connectToDatabase();
         const skip = (page - 1) * PAGE_SIZE;
 
-        let query: any = {};
-        if (search) {
-            query.$or = [
-                { gamingId: { $regex: search, $options: 'i' } },
-                { productName: { $regex: search, $options: 'i' } }
-            ]
-        }
-        
+        const query = buildPaymentSessionsQuery(search, startDate, endDate);
+
         const sessionsFromDb = await db.collection<PaymentLock>('payment_locks')
             .find(query)
             .sort({ createdAt: -1 })
@@ -92,6 +120,50 @@ export async function forceExpireLock(lockId: string): Promise<{ success: boolea
     console.error('Error force expiring lock:', error);
     return { success: false, message: 'An internal error occurred.' };
   }
+}
+
+// Permanently deletes one or more payment session records by their _id.
+// Used for the single-row delete and the "Delete Selected" action.
+export async function deletePaymentSessions(ids: string[]) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const objectIds = ids
+        .filter(id => ObjectId.isValid(id))
+        .map(id => new ObjectId(id));
+
+    if (objectIds.length === 0) {
+        return { success: false, message: 'No valid sessions selected.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<PaymentLock>('payment_locks').deleteMany({ _id: { $in: objectIds } });
+        revalidatePath('/admin/payment-sessions');
+        return { success: true, message: `Deleted ${result.deletedCount} session(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Error deleting payment sessions:', error);
+        return { success: false, message: 'Failed to delete sessions.', deletedCount: 0 };
+    }
+}
+
+// Permanently deletes every payment session matching the current filter
+// (search + IST time frame). Clears the whole time frame, not just the page.
+export async function deletePaymentSessionsInRange(search: string, startDate?: string, endDate?: string) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const query = buildPaymentSessionsQuery(search, startDate, endDate);
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<PaymentLock>('payment_locks').deleteMany(query);
+        revalidatePath('/admin/payment-sessions');
+        return { success: true, message: `Deleted ${result.deletedCount} session(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Error deleting payment sessions in range:', error);
+        return { success: false, message: 'Failed to delete sessions.', deletedCount: 0 };
+    }
 }
 
 export async function approvePaymentManually(lockId: string): Promise<{ success: boolean; message: string }> {

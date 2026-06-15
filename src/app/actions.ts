@@ -1000,23 +1000,46 @@ export async function deleteUser(userId: string): Promise<{success: boolean; mes
 
 const PAGE_SIZE = 10;
 
-export async function getOrdersForAdmin(
-  page: number, 
-  sort: string, 
-  search: string, 
-  status: ('Processing' | 'Completed' | 'Failed')[]
+// Builds the orders query shared by the listing, count and range-deletion so
+// "what you see" and "what gets deleted" always match. The optional time frame
+// filters on `createdAt` (IST). startDate/endDate are unused by most order
+// pages and only opted into by the Successful Orders management view.
+function buildOrdersQuery(
+  search: string,
+  status: ('Processing' | 'Completed' | 'Failed')[],
+  startDate?: string,
+  endDate?: string,
 ) {
-  noStore();
-  const db = await connectToDatabase();
-  const skip = (page - 1) * PAGE_SIZE;
-
-  let query: any = { status: { $in: status } };
+  const query: any = { status: { $in: status } };
   if (search) {
       query.$or = [
           { gamingId: { $regex: search, $options: 'i' } },
           { referralCode: { $regex: search, $options: 'i' } }
       ]
   }
+  const start = istLocalToUtcDate(startDate || '');
+  const end = istLocalToUtcDate(endDate || '');
+  if (start || end) {
+      query.createdAt = {};
+      if (start) query.createdAt.$gte = start;
+      if (end) query.createdAt.$lte = end;
+  }
+  return query;
+}
+
+export async function getOrdersForAdmin(
+  page: number,
+  sort: string,
+  search: string,
+  status: ('Processing' | 'Completed' | 'Failed')[],
+  startDate?: string,
+  endDate?: string,
+) {
+  noStore();
+  const db = await connectToDatabase();
+  const skip = (page - 1) * PAGE_SIZE;
+
+  const query = buildOrdersQuery(search, status, startDate, endDate);
 
   const ordersFromDb = await db.collection<Order>('orders')
       .find(query)
@@ -1031,6 +1054,59 @@ export async function getOrdersForAdmin(
   const orders = JSON.parse(JSON.stringify(ordersFromDb));
 
   return { orders, hasMore, totalOrders };
+}
+
+// Permanently deletes one or more order records by their _id. Used for the
+// single-row delete and the "Delete Selected" action in the orders management view.
+export async function deleteOrders(ids: string[]) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const objectIds = ids
+        .filter(id => ObjectId.isValid(id))
+        .map(id => new ObjectId(id));
+
+    if (objectIds.length === 0) {
+        return { success: false, message: 'No valid orders selected.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<Order>('orders').deleteMany({ _id: { $in: objectIds } });
+        revalidatePath('/admin/success');
+        revalidatePath('/admin/failed');
+        revalidatePath('/admin/all-orders');
+        return { success: true, message: `Deleted ${result.deletedCount} order(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Error deleting orders:', error);
+        return { success: false, message: 'Failed to delete orders.', deletedCount: 0 };
+    }
+}
+
+// Permanently deletes every order matching the current filter (status + search
+// + IST time frame). Clears the whole time frame, not just the loaded page.
+export async function deleteOrdersInRange(
+    search: string,
+    status: ('Processing' | 'Completed' | 'Failed')[],
+    startDate?: string,
+    endDate?: string,
+) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const query = buildOrdersQuery(search, status, startDate, endDate);
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<Order>('orders').deleteMany(query);
+        revalidatePath('/admin/success');
+        revalidatePath('/admin/failed');
+        revalidatePath('/admin/all-orders');
+        return { success: true, message: `Deleted ${result.deletedCount} order(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Error deleting orders in range:', error);
+        return { success: false, message: 'Failed to delete orders.', deletedCount: 0 };
+    }
 }
 
 export async function getLegacyUsersForAdmin(page: number, sort: string, search: string) {
@@ -1530,19 +1606,47 @@ export async function addCoinsToUser(gamingId: string, amount: number): Promise<
 }
 
 // --- Admin User Management ---
-export async function getUsersForAdmin(page: number, sort: string, search: string, since?: string) {
-    noStore();
-    const db = await connectToDatabase();
-    const skip = (page - 1) * PAGE_SIZE;
+// India Standard Time is a fixed UTC+05:30 offset (no daylight saving). The
+// admin date/time pickers send a wall-clock value with no timezone (e.g.
+// "2026-06-14T15:30") entered in IST. We pin the IST offset here so it is
+// converted to the correct UTC instant before querying (createdAt is UTC).
+function istLocalToUtcDate(local: string): Date | null {
+    if (!local) return null;
+    const withSeconds = local.length === 16 ? `${local}:00` : local;
+    const date = new Date(`${withSeconds}+05:30`);
+    return isNaN(date.getTime()) ? null : date;
+}
 
-    let query: any = { isHidden: { $ne: true } };
+// Builds the query shared by the admin user listing, count and range-deletion
+// so that "what you see" and "what gets deleted" always match. The time frame
+// filters on `createdAt` (the user's join date shown on each row).
+function buildAdminUsersQuery(search: string, startDate?: string, endDate?: string) {
+    const query: any = { isHidden: { $ne: true } };
     if (search) {
         query.$or = [
             { gamingId: { $regex: search, $options: 'i' } },
             { referredByCode: { $regex: search, $options: 'i' } }
         ];
     }
-    
+
+    const start = istLocalToUtcDate(startDate || '');
+    const end = istLocalToUtcDate(endDate || '');
+    if (start || end) {
+        query.createdAt = {};
+        if (start) query.createdAt.$gte = start;
+        if (end) query.createdAt.$lte = end;
+    }
+
+    return query;
+}
+
+export async function getUsersForAdmin(page: number, sort: string, search: string, since?: string, startDate?: string, endDate?: string) {
+    noStore();
+    const db = await connectToDatabase();
+    const skip = (page - 1) * PAGE_SIZE;
+
+    let query: any = buildAdminUsersQuery(search, startDate, endDate);
+
     const sinceDate = since ? new Date(since) : null;
     let aggregationPipeline: any[] = [];
 
@@ -1590,8 +1694,52 @@ export async function getUsersForAdmin(page: number, sort: string, search: strin
     const hasMore = skip + usersFromDb.length < totalUsers;
     
     const users = JSON.parse(JSON.stringify(usersFromDb));
-    
+
     return { users, hasMore, totalUsers };
+}
+
+// Permanently deletes one or more user documents by their _id.
+// Used for the single-row delete and the "Delete Selected" action.
+export async function deleteAdminUsers(ids: string[]) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const objectIds = ids
+        .filter(id => ObjectId.isValid(id))
+        .map(id => new ObjectId(id));
+
+    if (objectIds.length === 0) {
+        return { success: false, message: 'No valid users selected.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<User>('users').deleteMany({ _id: { $in: objectIds } });
+        revalidatePath('/admin/users');
+        return { success: true, message: `Deleted ${result.deletedCount} user(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error("Error deleting admin users:", error);
+        return { success: false, message: 'Failed to delete users.', deletedCount: 0 };
+    }
+}
+
+// Permanently deletes every user matching the current filter (search + IST
+// time frame on createdAt). Clears the whole time frame, not just the page.
+export async function deleteAdminUsersInRange(search: string, startDate?: string, endDate?: string) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const query = buildAdminUsersQuery(search, startDate, endDate);
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<User>('users').deleteMany(query);
+        revalidatePath('/admin/users');
+        return { success: true, message: `Deleted ${result.deletedCount} user(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error("Error deleting admin users in range:", error);
+        return { success: false, message: 'Failed to delete users.', deletedCount: 0 };
+    }
 }
 
 export async function banUser(userId: string, banMessage: string): Promise<{ success: boolean; message: string }> {
@@ -1754,7 +1902,7 @@ const sendToAllSchema = z.object({
   isPopup: z.enum(['on', 'off']).optional(),
 });
 
-export async function sendNotificationToAll(formData: FormData): Promise<{ success: boolean; message: string }> {
+export async function sendNotificationToAll(formData: FormData): Promise<{ success: boolean; message: string; broadcastId?: string }> {
     const isAdmin = await isAdminAuthenticated();
     if (!isAdmin) {
         return { success: false, message: 'Unauthorized' };
@@ -1776,6 +1924,26 @@ export async function sendNotificationToAll(formData: FormData): Promise<{ succe
         return { success: false, message: 'No active users found to send notifications to.' };
     }
 
+    // Step 1: Create a single broadcast notification document
+    const tokens = allUsers
+        .filter(u => !!u.fcmToken)
+        .map(u => ({ token: u.fcmToken as string, gamingId: u.gamingId }));
+
+    const broadcastDoc = {
+        message,
+        imageUrl: imageUrl || undefined,
+        isPopup,
+        createdAt: new Date(),
+        totalUsers: allUsers.length,
+        pushTotal: tokens.length,
+        pushSent: 0,
+        pushFailed: 0,
+        status: 'sending' as const,
+    };
+    const broadcastResult = await db.collection('broadcast_notifications').insertOne(broadcastDoc);
+    const broadcastId = broadcastResult.insertedId.toString();
+
+    // Step 2: Insert individual notification documents tagged with broadcastId
     const notifications: Omit<Notification, '_id'>[] = allUsers.map(user => ({
         gamingId: user.gamingId,
         message,
@@ -1783,24 +1951,33 @@ export async function sendNotificationToAll(formData: FormData): Promise<{ succe
         isRead: false,
         createdAt: new Date(),
         isPopup: isPopup,
+        broadcastId: broadcastId,
     }));
 
-    await db.collection<Notification>('notifications').insertMany(notifications as Notification[]);
+    await db.collection<Notification>('notifications').insertMany(notifications as Notification[], { ordered: false });
 
-    // Send push notifications
-    const tokens = allUsers.map(u => u.fcmToken).filter((t): t is string => !!t);
+    // Step 3: Send batched push notifications (fire-and-forget, progress tracked via DB)
     if (tokens.length > 0) {
-        await sendMulticastPushNotification({
+        // Import dynamically to keep this file's existing imports unchanged
+        const { sendBatchedPushNotifications } = await import('@/lib/broadcast-push-notifications');
+        // Fire and forget — don't await. Progress is tracked in the DB via SSE.
+        sendBatchedPushNotifications(
             tokens,
-            title: 'Garena Store',
-            body: message,
-            imageUrl: imageUrl || undefined,
-        });
+            'Garena Store',
+            message,
+            broadcastId,
+            imageUrl || undefined
+        ).catch(err => console.error('[Broadcast] Background push sending failed:', err));
+    } else {
+        // No tokens to send, mark as completed immediately
+        await db.collection('broadcast_notifications').updateOne(
+            { _id: broadcastResult.insertedId },
+            { $set: { status: 'completed' } }
+        );
     }
 
-
     revalidatePath('/');
-    return { success: true, message: `Notification sent to ${allUsers.length} users.` };
+    return { success: true, message: `Notification sent to ${allUsers.length} users. Push notifications are being delivered in batches.`, broadcastId };
 }
 
 export async function getNotificationsForUser(): Promise<Notification[]> {
@@ -1967,15 +2144,30 @@ export async function getChatHistory(): Promise<AiLog[]> {
 }
 
 
-export async function getAiLogs(page: number, search: string, sort: string) {
+// Builds the query shared by the AI log listing, count and range-deletion so
+// that "what you see" and "what gets deleted" always match. The time frame
+// filters on `createdAt` (IST), reusing the IST→UTC helper above.
+function buildAiLogsQuery(search: string, startDate?: string, endDate?: string) {
+    const query: any = {};
+    if (search) {
+        query.gamingId = { $regex: search, $options: 'i' };
+    }
+    const start = istLocalToUtcDate(startDate || '');
+    const end = istLocalToUtcDate(endDate || '');
+    if (start || end) {
+        query.createdAt = {};
+        if (start) query.createdAt.$gte = start;
+        if (end) query.createdAt.$lte = end;
+    }
+    return query;
+}
+
+export async function getAiLogs(page: number, search: string, sort: string, startDate?: string, endDate?: string) {
     noStore();
     const db = await connectToDatabase();
     const skip = (page - 1) * PAGE_SIZE;
 
-    let query: any = {};
-    if (search) {
-        query.gamingId = { $regex: search, $options: 'i' };
-    }
+    const query = buildAiLogsQuery(search, startDate, endDate);
 
     const logsFromDb = await db.collection<AiLog>('ai_logs')
         .find(query)
@@ -2011,6 +2203,50 @@ export async function deleteAiLog(logId: string): Promise<{ success: boolean; me
     } catch (error) {
         console.error('Error deleting AI log:', error);
         return { success: false, message: 'An unexpected error occurred.' };
+    }
+}
+
+// Permanently deletes one or more AI logs by their _id. Used for the
+// single-row delete and the "Delete Selected" action.
+export async function deleteAiLogs(ids: string[]) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const objectIds = ids
+        .filter(id => ObjectId.isValid(id))
+        .map(id => new ObjectId(id));
+
+    if (objectIds.length === 0) {
+        return { success: false, message: 'No valid logs selected.', deletedCount: 0 };
+    }
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<AiLog>('ai_logs').deleteMany({ _id: { $in: objectIds } });
+        revalidatePath('/admin/ai-logs');
+        return { success: true, message: `Deleted ${result.deletedCount} log(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Error deleting AI logs:', error);
+        return { success: false, message: 'Failed to delete logs.', deletedCount: 0 };
+    }
+}
+
+// Permanently deletes every AI log matching the current filter (search + IST
+// time frame). Clears the whole time frame, not just the loaded page.
+export async function deleteAiLogsInRange(search: string, startDate?: string, endDate?: string) {
+    const isAdmin = await isAdminAuthenticated();
+    if (!isAdmin) return { success: false, message: 'Unauthorized', deletedCount: 0 };
+
+    const query = buildAiLogsQuery(search, startDate, endDate);
+
+    try {
+        const db = await connectToDatabase();
+        const result = await db.collection<AiLog>('ai_logs').deleteMany(query);
+        revalidatePath('/admin/ai-logs');
+        return { success: true, message: `Deleted ${result.deletedCount} log(s).`, deletedCount: result.deletedCount };
+    } catch (error) {
+        console.error('Error deleting AI logs in range:', error);
+        return { success: false, message: 'Failed to delete logs.', deletedCount: 0 };
     }
 }
 

@@ -12,9 +12,11 @@ export default async function ActiveUsersPage({
   const page = typeof searchParams.page === 'string' ? Number(searchParams.page) : 1;
   const search = typeof searchParams.search === 'string' ? searchParams.search : '';
   const sort = typeof searchParams.sort === 'string' ? searchParams.sort : 'desc';
+  const startDate = typeof searchParams.startDate === 'string' ? searchParams.startDate : '';
+  const endDate = typeof searchParams.endDate === 'string' ? searchParams.endDate : '';
 
 
-  const { users, hasMore, totalUsers } = await getActiveUsers(page, search, sort);
+  const { users, hasMore, totalUsers } = await getActiveUsers(page, search, sort, startDate, endDate);
 
   return (
     <ActiveUserList

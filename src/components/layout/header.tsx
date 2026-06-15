@@ -41,7 +41,9 @@ export default function Header({ user, notifications, notificationKey, onNotific
         title: "Logged Out",
         description: "You have been successfully logged out.",
       });
-      window.location.reload();
+      // After a successful logout, send the user to the home page (full navigation
+      // so server state is refreshed just like the previous reload behavior).
+      window.location.href = '/';
     } else {
       toast({
         variant: "destructive",
@@ -55,7 +57,7 @@ export default function Header({ user, notifications, notificationKey, onNotific
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container px-4 md:px-6 flex h-16 items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
-           <Image src="/img/garena.png" alt="Garena Logo" width={32} height={32} className="h-8 w-8" />
+           <Image src="/img/garena.png" alt="Garena Logo" width={32} height={23} className="w-8 h-auto" />
           <span className="font-bold font-headline text-lg">Garena</span>
         </Link>
 
@@ -101,7 +103,7 @@ export default function Header({ user, notifications, notificationKey, onNotific
                     className="flex items-center gap-2 mb-4"
                     onClick={() => setIsSheetOpen(false)}
                   >
-                    <Image src="/img/garena.png" alt="Garena Logo" width={32} height={32} className="h-8 w-8" />
+                    <Image src="/img/garena.png" alt="Garena Logo" width={32} height={23} className="w-8 h-auto" />
                     <span className="font-bold font-headline text-lg">
                       Garena
                     </span>

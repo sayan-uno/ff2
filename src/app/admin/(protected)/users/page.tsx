@@ -11,8 +11,10 @@ export default async function AdminUsersPage({
   const sort = typeof searchParams.sort === 'string' ? searchParams.sort : 'visits'; // Default to visits
   const search = typeof searchParams.search === 'string' ? searchParams.search : '';
   const since = typeof searchParams.since === 'string' ? searchParams.since : '';
+  const startDate = typeof searchParams.startDate === 'string' ? searchParams.startDate : '';
+  const endDate = typeof searchParams.endDate === 'string' ? searchParams.endDate : '';
 
-  const { users, hasMore, totalUsers } = await getUsersForAdmin(page, sort, search, since);
+  const { users, hasMore, totalUsers } = await getUsersForAdmin(page, sort, search, since, startDate, endDate);
 
   return (
     <UserList

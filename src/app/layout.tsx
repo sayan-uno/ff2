@@ -179,6 +179,26 @@ export default function RootLayout({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Quietly keep the notification bell in sync every 15s so the unread count and
+  // the list reflect server changes WITHOUT the user having to close/re-open it.
+  // In particular, when a support reply is marked seen the server deletes that
+  // bell notification, and this poll makes it disappear (and the count drop) on
+  // its own. We only update the standard notifications here — popups are left
+  // untouched so a previously-closed popup never re-appears, and we never bump
+  // notificationKey so an open bell sheet is not remounted/closed mid-view.
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(async () => {
+      try {
+        const allNotifications = await getNotificationsForUser();
+        setStandardNotifications(allNotifications.filter(n => !n.isPopup));
+      } catch {
+        /* transient fetch error — try again on the next tick */
+      }
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [user]);
+
   useEffect(() => {
     if (user && typeof window !== 'undefined' && 'Notification' in window) {
         const localToken = localStorage.getItem(FCM_TOKEN_KEY);

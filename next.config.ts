@@ -9,6 +9,15 @@ const withPWA = require('next-pwa')({
 
 
 const nextConfig: NextConfig = {
+
+  experimental: {
+    serverActions: {
+      allowedOrigins: ['localhost:9002', '*.app.github.dev'],
+      bodySizeLimit: '12mb', // Allow up to an 8MB image (~11MB as a base64 data URI) per upload
+    },
+  },
+
+  
   /* config options here */
   typescript: {
     ignoreBuildErrors: true,

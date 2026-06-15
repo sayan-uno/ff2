@@ -14,8 +14,10 @@ export default async function AdminIpLoggerPage({
   const searchId = typeof searchParams.id === 'string' ? searchParams.id : '';
   const searchIp = typeof searchParams.ip === 'string' ? searchParams.ip : '';
   const searchFingerprint = typeof searchParams.fingerprint === 'string' ? searchParams.fingerprint : '';
-  
-  const { users, hasMore, totalUsers } = await getIpHistory(page, searchId, searchIp, searchFingerprint);
+  const startDate = typeof searchParams.startDate === 'string' ? searchParams.startDate : '';
+  const endDate = typeof searchParams.endDate === 'string' ? searchParams.endDate : '';
+
+  const { users, hasMore, totalUsers } = await getIpHistory(page, searchId, searchIp, searchFingerprint, startDate, endDate);
 
   return (
     <IpLogList

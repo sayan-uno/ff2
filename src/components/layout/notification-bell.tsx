@@ -121,7 +121,17 @@ export default function NotificationBell({ notifications: initialNotifications, 
           <div className="space-y-4 pb-8">
             {currentNotifications.map((notification) => (
               <div key={notification._id.toString()} className="p-4 rounded-lg border bg-card text-card-foreground shadow-sm">
-                <ClickableMessage message={notification.message} />
+                {notification.html ? (
+                  // Rich, server-generated HTML body (e.g. refund-accepted card).
+                  // Trusted content built on the server; constrained so it can never
+                  // overflow the notification sheet.
+                  <div
+                    className="max-w-full overflow-hidden [&_img]:max-w-full [&_a]:break-words"
+                    dangerouslySetInnerHTML={{ __html: notification.html }}
+                  />
+                ) : (
+                  <ClickableMessage message={notification.message} />
+                )}
                 {notification.imageUrl && (
                   <div className="relative aspect-video w-full mb-2 rounded-md overflow-hidden">
                     <ProductMedia src={notification.imageUrl} alt="Notification media" />

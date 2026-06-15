@@ -8,12 +8,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { ArrowUpDown, Loader2, Search, Coins, Eye, ShieldBan, ShieldCheck, History, Users, EyeOff, Bell, BellOff, Calendar } from 'lucide-react';
-import { banUser, getUsersForAdmin, unbanUser, hideUser } from '@/app/actions';
+import { ArrowUpDown, Loader2, Search, Coins, Eye, ShieldBan, ShieldCheck, History, Users, EyeOff, Bell, BellOff, Calendar, Trash2, Copy, X } from 'lucide-react';
+import { banUser, getUsersForAdmin, unbanUser, hideUser, deleteAdminUsers, deleteAdminUsersInRange } from '@/app/actions';
 import { useToast } from '@/hooks/use-toast';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { type User } from '@/lib/definitions';
 import { Badge } from '@/components/ui/badge';
 import Link from 'next/link';
@@ -53,6 +54,8 @@ export default function UserList({ initialUsers, initialHasMore, totalUsers }: U
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(initialHasMore);
     const [isPending, startTransition] = useTransition();
+    const [isDeleting, startDeleting] = useTransition();
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [banMessage, setBanMessage] = useState('');
     const [isBanModalOpen, setIsBanModalOpen] = useState(false);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -61,6 +64,9 @@ export default function UserList({ initialUsers, initialHasMore, totalUsers }: U
     const sort = searchParams.get('sort') || 'visits';
     const search = searchParams.get('search') || '';
     const since = searchParams.get('since') || '';
+    const activeStartDate = searchParams.get('startDate') || '';
+    const activeEndDate = searchParams.get('endDate') || '';
+    const hasFilter = Boolean(search || activeStartDate || activeEndDate);
 
     const [sinceDate, setSinceDate] = useState<Date | undefined>(since ? new Date(since) : undefined);
 
@@ -68,6 +74,7 @@ export default function UserList({ initialUsers, initialHasMore, totalUsers }: U
         setUsers(initialUsers);
         setHasMore(initialHasMore);
         setPage(1);
+        setSelectedIds(new Set());
     }, [initialUsers, initialHasMore]);
     
     useEffect(() => {
@@ -80,10 +87,104 @@ export default function UserList({ initialUsers, initialHasMore, totalUsers }: U
     const handleLoadMore = async () => {
         startTransition(async () => {
             const nextPage = page + 1;
-            const { users: newUsers, hasMore: newHasMore } = await getUsersForAdmin(nextPage, sort, search, since);
+            const { users: newUsers, hasMore: newHasMore } = await getUsersForAdmin(nextPage, sort, search, since, activeStartDate, activeEndDate);
             setUsers(prev => [...prev, ...newUsers]);
             setHasMore(newHasMore);
             setPage(nextPage);
+        });
+    };
+
+    const handleDateFilter = (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        const formData = new FormData(event.currentTarget);
+        const params = new URLSearchParams(searchParams);
+        const setOrDelete = (key: string, value: string) => {
+            if (value) params.set(key, value);
+            else params.delete(key);
+        };
+        setOrDelete('startDate', (formData.get('startDate') as string) || '');
+        setOrDelete('endDate', (formData.get('endDate') as string) || '');
+        params.delete('page');
+        router.push(`${pathname}?${params.toString()}`);
+    };
+
+    const handleClearDateFilter = () => {
+        const params = new URLSearchParams(searchParams);
+        params.delete('startDate');
+        params.delete('endDate');
+        params.delete('page');
+        router.push(`${pathname}?${params.toString()}`);
+    };
+
+    const allLoadedSelected = users.length > 0 && users.every(u => selectedIds.has(u._id.toString()));
+
+    const toggleSelectAll = (checked: boolean) => {
+        if (checked) setSelectedIds(new Set(users.map(u => u._id.toString())));
+        else setSelectedIds(new Set());
+    };
+
+    const toggleSelectOne = (id: string, checked: boolean) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (checked) next.add(id);
+            else next.delete(id);
+            return next;
+        });
+    };
+
+    const handleBulkCopy = async () => {
+        const ids = users.filter(u => selectedIds.has(u._id.toString())).map(u => u.gamingId);
+        if (ids.length === 0) return;
+        try {
+            await navigator.clipboard.writeText(ids.join(','));
+            toast({ title: 'Copied', description: `Copied ${ids.length} Gaming ID(s) to clipboard.` });
+        } catch {
+            toast({ variant: 'destructive', title: 'Error', description: 'Could not access the clipboard.' });
+        }
+    };
+
+    const handleDeleteOne = (id: string) => {
+        startDeleting(async () => {
+            const result = await deleteAdminUsers([id]);
+            if (result.success) {
+                toast({ title: 'Deleted', description: result.message });
+                setUsers(prev => prev.filter(u => u._id.toString() !== id));
+                setSelectedIds(prev => {
+                    const next = new Set(prev);
+                    next.delete(id);
+                    return next;
+                });
+            } else {
+                toast({ variant: 'destructive', title: 'Error', description: result.message });
+            }
+        });
+    };
+
+    const handleDeleteSelected = () => {
+        const ids = Array.from(selectedIds);
+        startDeleting(async () => {
+            const result = await deleteAdminUsers(ids);
+            if (result.success) {
+                toast({ title: 'Deleted', description: result.message });
+                setUsers(prev => prev.filter(u => !selectedIds.has(u._id.toString())));
+                setSelectedIds(new Set());
+                router.refresh();
+            } else {
+                toast({ variant: 'destructive', title: 'Error', description: result.message });
+            }
+        });
+    };
+
+    const handleDeleteAllInRange = () => {
+        startDeleting(async () => {
+            const result = await deleteAdminUsersInRange(search, activeStartDate, activeEndDate);
+            if (result.success) {
+                toast({ title: 'Deleted', description: result.message });
+                setSelectedIds(new Set());
+                router.refresh();
+            } else {
+                toast({ variant: 'destructive', title: 'Error', description: result.message });
+            }
         });
     };
     
@@ -232,21 +333,119 @@ export default function UserList({ initialUsers, initialHasMore, totalUsers }: U
 
                         </div>
                     </div>
+                    <form onSubmit={handleDateFilter} className="mt-4 flex flex-col gap-4 rounded-lg border bg-muted/30 p-4">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                                <Label htmlFor="startDate">Joined from (IST)</Label>
+                                <Input id="startDate" name="startDate" type="datetime-local" defaultValue={activeStartDate} />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="endDate">Joined to (IST)</Label>
+                                <Input id="endDate" name="endDate" type="datetime-local" defaultValue={activeEndDate} />
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button type="submit" variant="outline">
+                                <Search className="mr-2 h-4 w-4" />
+                                Apply Time Filter
+                            </Button>
+                            {(activeStartDate || activeEndDate) && (
+                                <Button type="button" variant="ghost" onClick={handleClearDateFilter}>
+                                    <X className="mr-2 h-4 w-4" />
+                                    Clear
+                                </Button>
+                            )}
+                            <p className="text-xs text-muted-foreground">Filters by join date in Indian Standard Time (IST).</p>
+                        </div>
+                    </form>
                 </CardHeader>
                 <CardContent>
                     {users.length === 0 ? (
                         <p className="text-muted-foreground">No users to display.</p>
                     ) : (
                         <div className="space-y-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+                                <div className="flex items-center gap-2">
+                                    <Checkbox
+                                        id="select-all-users"
+                                        checked={allLoadedSelected}
+                                        onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
+                                    />
+                                    <Label htmlFor="select-all-users" className="cursor-pointer text-sm">
+                                        Select all on this page
+                                        {selectedIds.size > 0 ? ` (${selectedIds.size} selected)` : ''}
+                                    </Label>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    {selectedIds.size > 0 && (
+                                        <Button variant="outline" size="sm" onClick={handleBulkCopy}>
+                                            <Copy className="mr-2 h-4 w-4" />
+                                            Bulk Copy ({selectedIds.size})
+                                        </Button>
+                                    )}
+                                    {selectedIds.size > 0 && (
+                                        <AlertDialog>
+                                            <AlertDialogTrigger asChild>
+                                                <Button variant="destructive" size="sm" disabled={isDeleting}>
+                                                    {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                                                    Delete Selected ({selectedIds.size})
+                                                </Button>
+                                            </AlertDialogTrigger>
+                                            <AlertDialogContent>
+                                                <AlertDialogHeader>
+                                                    <AlertDialogTitle>Delete selected users?</AlertDialogTitle>
+                                                    <AlertDialogDescription>
+                                                        This permanently deletes the {selectedIds.size} selected user account(s). This action cannot be undone.
+                                                    </AlertDialogDescription>
+                                                </AlertDialogHeader>
+                                                <AlertDialogFooter>
+                                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                                    <AlertDialogAction onClick={handleDeleteSelected}>Yes, Delete</AlertDialogAction>
+                                                </AlertDialogFooter>
+                                            </AlertDialogContent>
+                                        </AlertDialog>
+                                    )}
+                                    {hasFilter && totalUsers !== undefined && totalUsers > 0 && (
+                                        <AlertDialog>
+                                            <AlertDialogTrigger asChild>
+                                                <Button variant="destructive" size="sm" disabled={isDeleting}>
+                                                    {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                                                    Delete All in Filter ({totalUsers})
+                                                </Button>
+                                            </AlertDialogTrigger>
+                                            <AlertDialogContent>
+                                                <AlertDialogHeader>
+                                                    <AlertDialogTitle>Delete all {totalUsers} users in this filter?</AlertDialogTitle>
+                                                    <AlertDialogDescription>
+                                                        This permanently deletes every user account matching your current filter
+                                                        {activeStartDate || activeEndDate ? ' (the selected IST join-date frame)' : ''}, including any not shown on this page. This action cannot be undone.
+                                                    </AlertDialogDescription>
+                                                </AlertDialogHeader>
+                                                <AlertDialogFooter>
+                                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                                    <AlertDialogAction onClick={handleDeleteAllInRange}>Yes, Delete All</AlertDialogAction>
+                                                </AlertDialogFooter>
+                                            </AlertDialogContent>
+                                        </AlertDialog>
+                                    )}
+                                </div>
+                            </div>
                             {users.map(user => (
                                 <Card key={user._id.toString()} className={user.isBanned ? 'bg-destructive/10 border-destructive' : ''}>
                                     <CardHeader>
                                         <div className="flex justify-between items-start">
-                                            <CardTitle className="text-base font-mono">{user.gamingId}</CardTitle>
+                                            <div className="flex items-center gap-3">
+                                                <Checkbox
+                                                    checked={selectedIds.has(user._id.toString())}
+                                                    onCheckedChange={(checked) => toggleSelectOne(user._id.toString(), Boolean(checked))}
+                                                    aria-label="Select user"
+                                                />
+                                                <CardTitle className="text-base font-mono">{user.gamingId}</CardTitle>
+                                            </div>
                                              {user.isBanned && <Badge variant="destructive">Banned</Badge>}
                                         </div>
                                         <CardDescription>
-                                            Joined: <FormattedDate dateString={user.createdAt as unknown as string} />
+                                            Joined (IST): <FormattedDate dateString={user.createdAt as unknown as string} />
                                         </CardDescription>
                                     </CardHeader>
                                     <CardContent>
@@ -322,6 +521,25 @@ export default function UserList({ initialUsers, initialHasMore, totalUsers }: U
                                                 <ShieldBan className="h-4 w-4" />
                                             </Button>
                                         )}
+                                        <AlertDialog>
+                                            <AlertDialogTrigger asChild>
+                                                <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" disabled={isDeleting}>
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </AlertDialogTrigger>
+                                            <AlertDialogContent>
+                                                <AlertDialogHeader>
+                                                    <AlertDialogTitle>Delete this user?</AlertDialogTitle>
+                                                    <AlertDialogDescription>
+                                                        This permanently deletes the user account <span className="font-mono">{user.gamingId}</span>. This action cannot be undone.
+                                                    </AlertDialogDescription>
+                                                </AlertDialogHeader>
+                                                <AlertDialogFooter>
+                                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                                    <AlertDialogAction onClick={() => handleDeleteOne(user._id.toString())}>Yes, Delete</AlertDialogAction>
+                                                </AlertDialogFooter>
+                                            </AlertDialogContent>
+                                        </AlertDialog>
                                     </CardFooter>
                                 </Card>
                             ))}

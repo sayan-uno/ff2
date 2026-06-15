@@ -106,14 +106,31 @@ export default {
           '0%': { transform: 'rotate(0deg)' },
           '100%': { transform: 'rotate(360deg)' },
         },
+        // Used by the refund-status progress bar / cards for a "live" feel.
+        'refund-shimmer': {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(200%)' },
+        },
+        'refund-float': {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-6px)' },
+        },
+        'refund-pulse-ring': {
+          '0%': { transform: 'scale(0.85)', opacity: '0.7' },
+          '70%': { transform: 'scale(1.6)', opacity: '0' },
+          '100%': { transform: 'scale(1.6)', opacity: '0' },
+        },
       },
-      
+
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
         'progress-smooth': 'progress-smooth var(--duration, 30s) linear forwards',
         'slide-in-up': 'slide-in-up 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards',
         'radar-sweep': 'radar-sweep 2s linear infinite',
+        'refund-shimmer': 'refund-shimmer 2.2s ease-in-out infinite',
+        'refund-float': 'refund-float 3s ease-in-out infinite',
+        'refund-pulse-ring': 'refund-pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
     },
   },
