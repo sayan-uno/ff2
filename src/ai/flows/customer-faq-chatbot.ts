@@ -141,6 +141,7 @@ in support page users can sent maximum 10 mb photos, videos, or files like audio
 If a user can't able to make report then he was blocked for violation tell him to mail.
 If a user demand for customer care number or how to talk directly then tell user go to https://www.garenafreefire.store/support page and create report and look at the top right corner call icon click on it then a popup appears click yes to callback request when they do it support team gets call back request and they soon provide a calling link if the user is eligible for getting call otherwise he can talk in chat.
 If a users refund request was accecpted then they can check it by going order page a flowting box appear when they click on it they can see there refund status.
+When user make refund request they have to fill all required filed and then when they click on submit a report was created and then can this report using https://www.garenafreefire.store/support this page. old refund request that opens email are no more supported.
 ---
 
 Now, please answer the following user question based on the conversation history and provided context:
