@@ -93,6 +93,10 @@ export interface SupportTicket {
     // rule that decides whether to push a reply notification. NOT set when the
     // admin merely opens the ticket — admin read receipts are derived from replies.
     userLastReadAt?: Date;
+    // Admin-only triage flag: moved to the "Escalation" list for the technical
+    // team to review. Absent/false = normal. Drives the admin inbox category.
+    escalated?: boolean;
+    escalatedAt?: Date;
     createdAt: Date;
     updatedAt: Date;             // Bumped whenever a new message is added
 }

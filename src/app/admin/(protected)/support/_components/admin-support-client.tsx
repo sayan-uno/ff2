@@ -51,6 +51,7 @@ import {
   RotateCcw,
   Pencil,
   ImageOff,
+  AlertTriangle,
 } from 'lucide-react';
 import AcceptRefundDialog from './accept-refund-dialog';
 import SupportUserIdentityHeader from './support-user-identity-header';
@@ -76,6 +77,14 @@ import {
   adminDeleteMessage,
   adminDeleteMessageAttachments,
 } from '@/app/support/admin-message-actions';
+import {
+  getBlockedGamingIds,
+  setTicketEscalation,
+  bulkSetEscalation,
+  bulkUnblockSupportUsers,
+  bulkDeleteReportAttachments,
+} from '@/app/support/category-actions';
+import SupportCategoryBar, { type SupportCategory } from './support-category-bar';
 import {
   uploadFileInChunks,
   FileAttachments,
@@ -275,6 +284,10 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  // Inbox category + the set of currently-blocked gaming IDs (for the Blocked view).
+  const [category, setCategory] = useState<SupportCategory>('all');
+  const [blockedIds, setBlockedIds] = useState<Set<string>>(new Set());
+  const [isCategoryActing, setIsCategoryActing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
@@ -322,6 +335,20 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     const fresh = await getAllTicketsForAdmin();
     setTickets(fresh);
   }, []);
+
+  // Keep the set of blocked gaming IDs current (drives the "Blocked" category).
+  const refreshBlocked = useCallback(async () => {
+    try {
+      const ids = await getBlockedGamingIds();
+      setBlockedIds(new Set(ids));
+    } catch {
+      /* leave as-is on failure */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshBlocked();
+  }, [refreshBlocked]);
 
   // Poll the open ticket + the list so new user messages show up live.
   useEffect(() => {
@@ -384,12 +411,14 @@ export default function AdminSupportClient({ initialTickets }: Props) {
       if (result.success) {
         setActiveBlocked(false);
         toast({ title: 'Unblocked', description: result.message });
+        refreshBlocked();
       }
     } else {
       const result = await blockSupportUser(gamingId);
       if (result.success) {
         setActiveBlocked(true);
         toast({ title: 'Blocked', description: result.message });
+        refreshBlocked();
       }
     }
   };
@@ -639,7 +668,29 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const endMs = istLocalToMs(toDate);
   const hasFilter = Boolean(search || fromDate || toDate);
 
-  const filtered = tickets.filter((t) => {
+  // True if a report still has at least one live (non-tombstoned) attachment.
+  const ticketHasAttachment = useCallback((t: SupportTicket) => {
+    return (t.messages || []).some(
+      (m) => (m.imageIds?.length || 0) + (m.fileIds?.length || 0) > 0
+    );
+  }, []);
+
+  // Does a ticket belong to the given category? ('all' matches everything.)
+  const matchesCategory = useCallback(
+    (t: SupportTicket, cat: SupportCategory) => {
+      switch (cat) {
+        case 'escalation': return !!t.escalated;
+        case 'blocked': return blockedIds.has(t.gamingId);
+        case 'closed': return t.status === 'closed';
+        case 'attachments': return ticketHasAttachment(t);
+        default: return true;
+      }
+    },
+    [blockedIds, ticketHasAttachment]
+  );
+
+  // Search + time-frame filter (shared by every category and the chip counts).
+  const timeSearchFiltered = tickets.filter((t) => {
     const q = search.toLowerCase();
     const matchesSearch =
       !q ||
@@ -656,6 +707,18 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     }
     return true;
   });
+
+  // The list shown for the active category (time/search already applied).
+  const filtered = timeSearchFiltered.filter((t) => matchesCategory(t, category));
+
+  // Live chip counts, scoped to the current time/search filter.
+  const categoryCounts: Record<SupportCategory, number> = {
+    all: timeSearchFiltered.length,
+    escalation: timeSearchFiltered.filter((t) => matchesCategory(t, 'escalation')).length,
+    blocked: timeSearchFiltered.filter((t) => matchesCategory(t, 'blocked')).length,
+    closed: timeSearchFiltered.filter((t) => matchesCategory(t, 'closed')).length,
+    attachments: timeSearchFiltered.filter((t) => matchesCategory(t, 'attachments')).length,
+  };
 
   const totalUnread = tickets.reduce((sum, t) => sum + (t.adminUnread || 0), 0);
 
@@ -716,6 +779,79 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     }
   };
 
+  // The selected report ids, limited to what's actually visible in the category.
+  const selectedFilteredIds = () =>
+    filtered.filter((t) => selectedIds.has(t._id.toString())).map((t) => t._id.toString());
+
+  // --- Single-report escalation toggle (3-dot menu in the open conversation) ---
+  const handleToggleEscalation = async () => {
+    if (!activeTicket) return;
+    const id = activeTicket._id.toString();
+    const next = !activeTicket.escalated;
+    const result = await setTicketEscalation(id, next);
+    if (result.success) {
+      toast({ title: next ? 'Escalated' : 'De-escalated', description: result.message });
+      const fresh = await getTicketForAdmin(id);
+      if (fresh) setActiveTicket(fresh);
+      refreshList();
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: result.message });
+    }
+  };
+
+  // --- Category bulk actions over the current selection ---
+  const handleBulkRemoveEscalation = async () => {
+    const ids = selectedFilteredIds();
+    if (ids.length === 0) return;
+    setIsCategoryActing(true);
+    const res = await bulkSetEscalation(ids, false);
+    setIsCategoryActing(false);
+    if (res.success) {
+      toast({ title: 'Done', description: res.message });
+      setSelectedIds(new Set());
+      refreshList();
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: res.message });
+    }
+  };
+
+  const handleBulkUnblock = async () => {
+    const gamingIds = filtered
+      .filter((t) => selectedIds.has(t._id.toString()))
+      .map((t) => t.gamingId);
+    if (gamingIds.length === 0) return;
+    setIsCategoryActing(true);
+    const res = await bulkUnblockSupportUsers(gamingIds);
+    setIsCategoryActing(false);
+    if (res.success) {
+      toast({ title: 'Done', description: res.message });
+      setSelectedIds(new Set());
+      await refreshBlocked();
+      if (activeTicket) setActiveBlocked(await getSupportBlockStatus(activeTicket.gamingId));
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: res.message });
+    }
+  };
+
+  const handleBulkDeleteAttachments = async () => {
+    const ids = selectedFilteredIds();
+    if (ids.length === 0) return;
+    setIsCategoryActing(true);
+    const res = await bulkDeleteReportAttachments(ids);
+    setIsCategoryActing(false);
+    if (res.success) {
+      toast({ title: 'Done', description: res.message });
+      setSelectedIds(new Set());
+      refreshList();
+      if (activeId) {
+        const fresh = await getTicketForAdmin(activeId);
+        if (fresh) setActiveTicket(fresh);
+      }
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: res.message });
+    }
+  };
+
   return (
     <div>
       <div className="mb-4">
@@ -734,6 +870,12 @@ export default function AdminSupportClient({ initialTickets }: Props) {
         <div className="grid grid-cols-1 md:grid-cols-[340px_1fr] h-[75vh] min-h-0">
           {/* Ticket list */}
           <div className={`border-r flex-col min-h-0 overflow-hidden ${activeId ? 'hidden md:flex' : 'flex'}`}>
+            {/* Category selector — time/search filters compose with the chosen category. */}
+            <SupportCategoryBar
+              category={category}
+              counts={categoryCounts}
+              onChange={(c) => { setCategory(c); setSelectedIds(new Set()); }}
+            />
             <div className="p-3 border-b space-y-2">
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -777,6 +919,47 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                     <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleBulkCopy}>
                       <Copy className="h-3.5 w-3.5 mr-1" /> Bulk Copy ({selectedIds.size})
                     </Button>
+                  )}
+                  {/* Category-specific bulk action (besides full delete below). */}
+                  {selectedIds.size > 0 && category === 'escalation' && (
+                    <Button variant="outline" size="sm" className="h-8 text-xs" disabled={isCategoryActing} onClick={handleBulkRemoveEscalation}>
+                      {isCategoryActing ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5 mr-1" />}
+                      Remove from escalation ({selectedIds.size})
+                    </Button>
+                  )}
+                  {selectedIds.size > 0 && category === 'blocked' && (
+                    <Button variant="outline" size="sm" className="h-8 text-xs" disabled={isCategoryActing} onClick={handleBulkUnblock}>
+                      {isCategoryActing ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5 mr-1" />}
+                      Unblock ({selectedIds.size})
+                    </Button>
+                  )}
+                  {selectedIds.size > 0 && category === 'attachments' && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="outline" size="sm" className="h-8 text-xs" disabled={isCategoryActing}>
+                          {isCategoryActing ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <ImageOff className="h-3.5 w-3.5 mr-1" />}
+                          Delete attachments ({selectedIds.size})
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete attachments from {selectedIds.size} report(s)?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            The files are permanently removed from the database to free space; the reports and their
+                            messages stay, with a small placeholder icon where each attachment was. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={(e) => { e.preventDefault(); handleBulkDeleteAttachments(); }}
+                          >
+                            Delete attachments
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   )}
                   {selectedIds.size > 0 && (
                     <AlertDialog>
@@ -864,7 +1047,12 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1">
-                          <span className="font-semibold truncate text-sm">{ticket.subject}</span>
+                          <span className="font-semibold truncate text-sm flex items-center gap-1">
+                            {ticket.escalated && (
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-orange-500" aria-label="Escalated" />
+                            )}
+                            {ticket.subject}
+                          </span>
                           {ticket.adminUnread > 0 && (
                             <span className="shrink-0 h-5 min-w-5 px-1.5 rounded-full bg-[#25D366] text-white text-xs font-bold flex items-center justify-center">
                               {ticket.adminUnread}
@@ -923,6 +1111,11 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-[15px] truncate flex items-center gap-1.5">
                       {activeTicket.subject}
+                      {activeTicket.escalated && (
+                        <span className="text-[10px] font-normal bg-orange-500 text-white px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                          <AlertTriangle className="h-3 w-3" /> Escalated
+                        </span>
+                      )}
                       {activeBlocked && (
                         <span className="text-[10px] font-normal bg-red-600 text-white px-1.5 py-0.5 rounded">
                           Blocked
@@ -964,6 +1157,11 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                       <DropdownMenuItem onClick={() => setShowRefundDialog(true)}>
                         <BadgeCheck className="h-4 w-4 mr-2 text-emerald-600" />
                         Accept refund request
+                      </DropdownMenuItem>
+                      {/* Escalation: move this report to the technical-team list (or back). */}
+                      <DropdownMenuItem onClick={handleToggleEscalation}>
+                        <AlertTriangle className={`h-4 w-4 mr-2 ${activeTicket.escalated ? 'text-muted-foreground' : 'text-orange-600'}`} />
+                        {activeTicket.escalated ? 'Remove from escalation list' : 'Move to escalation list'}
                       </DropdownMenuItem>
                       {/* Upload limit control. Shows the user's current limit and
                           lets the admin grant 250MB (or reset to the 10MB default). */}
