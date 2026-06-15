@@ -276,6 +276,8 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const newTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // Chat input box: auto-grows as the user types (WhatsApp-style).
+  const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
   // Separate hidden inputs for the new Videos / Files options.
   const videoInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
@@ -315,6 +317,25 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
       requestAnimationFrame(() => scrollToBottom(false));
     }
   }, [activeTicket?.messages.length, view, scrollToBottom]);
+
+  // WhatsApp-style auto-growing chat input: the box grows one line at a time as
+  // the user types and caps at ~7 lines, after which it scrolls internally so
+  // the upper text can be reviewed by scrolling up within the box.
+  const CHAT_INPUT_MAX_HEIGHT = 160; // ~7 visible lines, then it starts scrolling
+  const autoResizeChatInput = useCallback(() => {
+    const el = chatTextareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto'; // reset so shrinking works when text is deleted
+    const next = Math.min(el.scrollHeight, CHAT_INPUT_MAX_HEIGHT);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > CHAT_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  }, []);
+
+  // Keep the box sized correctly as the value changes (typing, sending/clearing,
+  // or first entering the chat view).
+  useEffect(() => {
+    autoResizeChatInput();
+  }, [chatInput, view, autoResizeChatInput]);
 
   // Poll the open ticket every 2s so admin replies appear (and are marked seen)
   // quickly — fast enough that an actively-watching user reliably registers a
@@ -972,17 +993,12 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
               </DropdownMenuContent>
             </DropdownMenu>
             <Textarea
+              ref={chatTextareaRef}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
               placeholder="Type a message"
               rows={1}
-              className="flex-1 resize-none bg-white rounded-full px-4 py-2 min-h-[42px] max-h-32 border-0 focus-visible:ring-0 text-[14px]"
+              className="flex-1 resize-none bg-white rounded-2xl px-4 py-2.5 min-h-[44px] border-0 focus-visible:ring-0 text-[14px] leading-snug shadow-sm"
             />
             <Button
               onClick={handleSend}
