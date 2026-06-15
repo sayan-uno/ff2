@@ -43,6 +43,12 @@ import {
   ShieldCheck,
   BadgeCheck,
   Copy,
+  Paperclip,
+  Image as ImageIcon,
+  Film,
+  FileText,
+  HardDriveUpload,
+  RotateCcw,
 } from 'lucide-react';
 import AcceptRefundDialog from './accept-refund-dialog';
 import SupportUserIdentityHeader from './support-user-identity-header';
@@ -60,6 +66,19 @@ import {
   unblockSupportUser,
   getSupportBlockStatus,
 } from '@/app/support/actions';
+import {
+  getUserUploadLimit,
+  setUserUploadLimit,
+  sendAdminFileMessage,
+} from '@/app/support/file-actions';
+import {
+  uploadFileInChunks,
+  FileAttachments,
+  SystemNotice,
+  isSystemMessage,
+  formatBytes,
+  DEFAULT_UPLOAD_LIMIT_BYTES,
+} from '@/app/support/_components/support-attachments';
 import type { SupportTicket, SupportMessage } from '@/lib/support-definitions';
 
 function isSameDay(a: Date, b: Date) {
@@ -211,10 +230,17 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showRefundDialog, setShowRefundDialog] = useState(false);
+  // The open user's video/file upload limit (10MB default, up to 250MB granted).
+  const [uploadLimitBytes, setUploadLimitBytes] = useState<number>(DEFAULT_UPLOAD_LIMIT_BYTES);
+  const [isSettingLimit, setIsSettingLimit] = useState(false);
+  // Progress (0..1) of an in-flight admin video/file upload.
+  const [fileProgress, setFileProgress] = useState<number | null>(null);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
   // Guards the poll from clobbering an in-flight optimistic send.
   const sendingRef = useRef(false);
 
@@ -263,7 +289,9 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     setReply('');
     const fresh = await getTicketForAdmin(id);
     setActiveTicket(fresh || ticket);
-    setActiveBlocked(await getSupportBlockStatus((fresh || ticket).gamingId));
+    const gid = (fresh || ticket).gamingId;
+    setActiveBlocked(await getSupportBlockStatus(gid));
+    getUserUploadLimit(gid).then((r) => setUploadLimitBytes(r.limitBytes)).catch(() => {});
     if ((fresh || ticket).adminUnread > 0) {
       await markTicketReadByAdmin(id);
       setTickets((prev) => prev.map((t) => (t._id.toString() === id ? { ...t, adminUnread: 0 } : t)));
@@ -423,6 +451,75 @@ export default function AdminSupportClient({ initialTickets }: Props) {
     }
     sendingRef.current = false;
     setIsSending(false);
+  };
+
+  // Grant the open user the 250MB tier (or reset them back to 10MB). Posts the
+  // "limit granted" system notice + notifies the user when granting.
+  const handleSetUploadLimit = async (grant: boolean) => {
+    if (!activeTicket) return;
+    const id = activeTicket._id.toString();
+    setIsSettingLimit(true);
+    const result = await setUserUploadLimit(id, activeTicket.gamingId, grant);
+    setIsSettingLimit(false);
+    if (result.success) {
+      toast({ title: grant ? 'Limit increased' : 'Limit reset', description: result.message });
+      const r = await getUserUploadLimit(activeTicket.gamingId);
+      setUploadLimitBytes(r.limitBytes);
+      const fresh = await getTicketForAdmin(id);
+      if (fresh) setActiveTicket(fresh);
+      refreshList();
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: result.message });
+    }
+  };
+
+  // Admin sends a single video/document (no per-user cap; server caps at 250MB).
+  const handleSendFile = async (file: File, kind: 'video' | 'file') => {
+    if (!activeTicket) return;
+    const id = activeTicket._id.toString();
+
+    setIsSending(true);
+    sendingRef.current = true;
+    setFileProgress(0);
+
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: SupportTicket = {
+      ...activeTicket,
+      messages: [
+        ...activeTicket.messages,
+        {
+          _id: tempId as any,
+          sender: 'admin',
+          text: '',
+          files: [{ _id: 'temp-file', filename: file.name, contentType: file.type, size: file.size, kind }],
+          uploading: true,
+          createdAt: new Date().toISOString() as any,
+        } as SupportMessage,
+      ],
+      lastSenderRole: 'admin',
+    };
+    setActiveTicket(optimistic);
+
+    const up = await uploadFileInChunks(file, id, (f) => setFileProgress(f));
+    if (up.success && up.fileId) {
+      await sendAdminFileMessage(id, [up.fileId], '');
+    } else {
+      toast({ variant: 'destructive', title: 'Could not send', description: up.message || 'Upload failed.' });
+    }
+
+    const fresh = await getTicketForAdmin(id);
+    if (fresh) setActiveTicket(fresh);
+    setFileProgress(null);
+    refreshList();
+    sendingRef.current = false;
+    setIsSending(false);
+  };
+
+  const handleMediaSelect = async (e: React.ChangeEvent<HTMLInputElement>, kind: 'video' | 'file') => {
+    const file = (e.target.files || [])[0];
+    e.target.value = '';
+    if (!file) return;
+    await handleSendFile(file, kind);
   };
 
   const handleToggleStatus = async () => {
@@ -675,11 +772,18 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                           {ticket.visualGamingId || ticket.gamingId}
                         </p>
                         <p className="text-xs text-muted-foreground truncate">
-                          {last
-                            ? `${last.sender === 'admin' ? 'You: ' : ''}${
-                                last.text || (last.imageIds && last.imageIds.length > 0 ? '📷 Photo' : '')
-                              }`
-                            : ''}
+                          {!last
+                            ? ''
+                            : (last as any).kind === 'system'
+                            ? last.text
+                            : `${last.sender === 'admin' ? 'You: ' : ''}${
+                                last.text ||
+                                (last.imageIds && last.imageIds.length > 0
+                                  ? '📷 Photo'
+                                  : last.fileIds && last.fileIds.length > 0
+                                  ? '📎 Attachment'
+                                  : '')
+                              }`}
                         </p>
                       </div>
                     </button>
@@ -758,6 +862,22 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                         <BadgeCheck className="h-4 w-4 mr-2 text-emerald-600" />
                         Accept refund request
                       </DropdownMenuItem>
+                      {/* Upload limit control. Shows the user's current limit and
+                          lets the admin grant 250MB (or reset to the 10MB default). */}
+                      {uploadLimitBytes >= 250 * 1024 * 1024 ? (
+                        <DropdownMenuItem onClick={() => handleSetUploadLimit(false)} disabled={isSettingLimit}>
+                          <RotateCcw className="h-4 w-4 mr-2 text-amber-600" />
+                          Reset upload limit to 10 MB
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={() => handleSetUploadLimit(true)} disabled={isSettingLimit}>
+                          <HardDriveUpload className="h-4 w-4 mr-2 text-blue-600" />
+                          Increase upload limit to 250 MB
+                          <span className="ml-auto pl-3 text-[10px] text-muted-foreground">
+                            now {formatBytes(uploadLimitBytes)}
+                          </span>
+                        </DropdownMenuItem>
+                      )}
                       {activeBlocked ? (
                         <DropdownMenuItem onClick={handleToggleBlock}>
                           <ShieldCheck className="h-4 w-4 mr-2 text-green-600" />
@@ -793,6 +913,18 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                     const prev = idx > 0 ? activeTicket.messages[idx - 1] : null;
                     const showDate =
                       !prev || !isSameDay(new Date(prev.createdAt as any), new Date(msg.createdAt as any));
+
+                    // System notices (limit requested / granted) render centered so
+                    // the admin clearly sees the request — and the inbox preview/badge
+                    // already flagged it as a new message.
+                    if (isSystemMessage(msg)) {
+                      return (
+                        <Fragment key={msg._id?.toString() || idx}>
+                          {showDate && <DateSeparator date={msg.createdAt as any} />}
+                          <SystemNotice message={msg.text} type={(msg as any).systemType} />
+                        </Fragment>
+                      );
+                    }
                     return (
                       <Fragment key={msg._id?.toString() || idx}>
                         {showDate && <DateSeparator date={msg.createdAt as any} />}
@@ -814,6 +946,13 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                                 onZoom={(url) => setZoomedImage(url)}
                                 uploading={(msg as any).uploading}
                                 progress={(msg as any).uploading ? uploadProgress : null}
+                              />
+                            )}
+                            {msg.files && msg.files.length > 0 && (
+                              <FileAttachments
+                                files={msg.files}
+                                uploading={(msg as any).uploading}
+                                progress={(msg as any).uploading ? fileProgress : null}
                               />
                             )}
                             <div className="px-1.5 pb-1">
@@ -880,15 +1019,46 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                     className="hidden"
                     onChange={handleFileSelect}
                   />
-                  <Button
-                    onClick={() => fileInputRef.current?.click()}
-                    size="icon"
-                    variant="ghost"
-                    title="Attach images"
-                    className="h-11 w-11 rounded-full shrink-0 text-[#075E54] hover:bg-black/5"
-                  >
-                    <ImagePlus className="h-5 w-5" />
-                  </Button>
+                  <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(e) => handleMediaSelect(e, 'video')}
+                  />
+                  <input
+                    ref={docInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => handleMediaSelect(e, 'file')}
+                  />
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Attach"
+                        disabled={isSending}
+                        className="h-11 w-11 rounded-full shrink-0 text-[#075E54] hover:bg-black/5"
+                      >
+                        <Paperclip className="h-5 w-5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" side="top" className="mb-1">
+                      <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                        <ImageIcon className="h-4 w-4 mr-2 text-violet-600" />
+                        Photos
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => videoInputRef.current?.click()}>
+                        <Film className="h-4 w-4 mr-2 text-rose-600" />
+                        Videos
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => docInputRef.current?.click()}>
+                        <FileText className="h-4 w-4 mr-2 text-sky-600" />
+                        Files
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <Textarea
                     value={reply}
                     onChange={(e) => setReply(e.target.value)}

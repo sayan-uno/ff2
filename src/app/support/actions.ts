@@ -10,6 +10,7 @@ import { isAdminAuthenticated } from '@/app/actions';
 import type { SupportTicket, SupportMessage, SupportImage } from '@/lib/support-definitions';
 import type { User, Notification } from '@/lib/definitions';
 import { notifyUserOfSupportReply } from '@/lib/support-reply-notifier';
+import { populateTicketFiles, deleteTicketFiles } from '@/lib/support-files';
 
 const COLLECTION = 'support_tickets';
 const IMAGE_COLLECTION = 'support_images';
@@ -125,6 +126,7 @@ export async function getMyTicket(ticketId: string): Promise<SupportTicket | nul
 
     if (!ticket) return null;
     await populateTicketImages(db, ticket);
+    await populateTicketFiles(db, ticket);
     return JSON.parse(JSON.stringify(ticket));
 }
 
@@ -511,6 +513,7 @@ export async function getTicketForAdmin(ticketId: string): Promise<SupportTicket
     const ticket = await db.collection<SupportTicket>(COLLECTION).findOne({ _id: new ObjectId(ticketId) });
     if (!ticket) return null;
     await populateTicketImages(db, ticket);
+    await populateTicketFiles(db, ticket);
     return JSON.parse(JSON.stringify(ticket));
 }
 
@@ -713,6 +716,7 @@ export async function deleteTicket(ticketId: string): Promise<{ success: boolean
     try {
         const db = await connectToDatabase();
         await db.collection<SupportImage>(IMAGE_COLLECTION).deleteMany({ ticketId });
+        await deleteTicketFiles(db, [ticketId]);
         await db.collection<SupportTicket>(COLLECTION).deleteOne({ _id: new ObjectId(ticketId) });
         revalidatePath('/admin/support');
         return { success: true, message: 'Report deleted.' };
@@ -738,8 +742,9 @@ export async function deleteTickets(ticketIds: string[]): Promise<{ success: boo
     try {
         const db = await connectToDatabase();
         const objectIds = validIds.map((id) => new ObjectId(id));
-        // Remove the images attached to these reports first, then the reports.
+        // Remove the images + GridFS files attached to these reports, then the reports.
         await db.collection<SupportImage>(IMAGE_COLLECTION).deleteMany({ ticketId: { $in: validIds } });
+        await deleteTicketFiles(db, validIds);
         const result = await db.collection<SupportTicket>(COLLECTION).deleteMany({ _id: { $in: objectIds } });
         revalidatePath('/admin/support');
         return { success: true, message: `Deleted ${result.deletedCount} report(s).`, deletedCount: result.deletedCount };

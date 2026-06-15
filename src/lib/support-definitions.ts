@@ -17,7 +17,36 @@ export interface SupportMessage {
     imageIds?: string[];      // References to SupportImage documents (what is stored)
     // Populated only when a single ticket is fetched for viewing (NOT stored in the DB).
     images?: { _id: string; url: string }[];
+
+    // --- Large attachments (videos & files) ---
+    // References to GridFS files stored in the 'support_files' bucket. Used for
+    // videos and documents that are too big for the inline base64 image path.
+    // Self-contained: when these are absent the message behaves exactly like
+    // before, so existing image/text messages are completely unaffected.
+    fileIds?: string[];
+    // Populated only when a ticket is fetched for viewing (NOT stored in the DB).
+    files?: SupportFileRef[];
+
+    // --- System notices ---
+    // A 'system' message is a server-generated notice rendered as a centered
+    // banner in the chat (NOT a left/right bubble). `sender` is still set (to the
+    // role that triggered it) so unread counting / previews keep working, but the
+    // UI keys off `kind === 'system'` for rendering.
+    kind?: 'system';
+    systemType?: 'upload_limit_request' | 'upload_limit_granted';
+
     createdAt: Date;
+}
+
+// Lightweight, display-only descriptor of a GridFS attachment, attached to a
+// message when a ticket is fetched for viewing. The raw bytes are streamed from
+// /api/support/file/<id>; only this metadata is ever embedded in the ticket.
+export interface SupportFileRef {
+    _id: string;
+    filename: string;
+    contentType: string;
+    size: number;                       // Bytes
+    kind: 'video' | 'file';             // How the bubble should render it
 }
 
 // An image attached to a support message. Stored in its own collection
@@ -29,6 +58,17 @@ export interface SupportImage {
     dataUri: string;   // The full base64 data URI of the image
     uploadedBy?: 'user' | 'admin'; // Who uploaded it (defaults to 'user' for older docs)
     createdAt: Date;
+}
+
+// Per-user upload limit for large attachments (videos & files). Stored in its
+// own collection ('support_upload_limits'), keyed by gamingId. Absent means the
+// user is on the default 10MB tier; admins can raise a single user to 250MB.
+export interface SupportUploadLimit {
+    _id: ObjectId;
+    gamingId: string;
+    limitBytes: number;        // The user's current max per-file size for videos/files
+    updatedAt: Date;
+    updatedBy?: 'admin';
 }
 
 // A support "report" / conversation thread opened by a user.

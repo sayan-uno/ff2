@@ -15,7 +15,17 @@ import {
   CheckCheck,
   ImagePlus,
   X,
+  Paperclip,
+  Image as ImageIcon,
+  Film,
+  FileText,
 } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   createTicket,
   getMyTickets,
@@ -26,6 +36,19 @@ import {
   sendUserImageMessage,
   getImageQuota,
 } from '../actions';
+import {
+  getMyUploadLimit,
+  requestUploadLimitIncrease,
+  sendUserFileMessage,
+} from '../file-actions';
+import {
+  uploadFileInChunks,
+  FileAttachments,
+  SystemNotice,
+  isSystemMessage,
+  formatBytes,
+  DEFAULT_UPLOAD_LIMIT_BYTES,
+} from './support-attachments';
 import type { SupportTicket, SupportMessage } from '@/lib/support-definitions';
 import GamingIdModal from '@/components/gaming-id-modal';
 
@@ -240,6 +263,15 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
   const fileInputRef = useRef<HTMLInputElement>(null);
   const newFileInputRef = useRef<HTMLInputElement>(null);
   const newTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // Separate hidden inputs for the new Videos / Files options.
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
+
+  // Per-file upload limit (videos & files). Default 10MB; admin can grant 250MB.
+  const [uploadLimitBytes, setUploadLimitBytes] = useState<number>(DEFAULT_UPLOAD_LIMIT_BYTES);
+  // Progress (0..1) of an in-flight video/file upload, keyed nowhere because
+  // only one large upload runs at a time.
+  const [fileProgress, setFileProgress] = useState<number | null>(null);
 
   // Login popup (shown only when a logged-out user tries to create a report).
   const [showLogin, setShowLogin] = useState(false);
@@ -312,15 +344,25 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
     setImageRemaining(quota.remaining);
   }, []);
 
+  const refreshUploadLimit = useCallback(async () => {
+    try {
+      const { limitBytes } = await getMyUploadLimit();
+      setUploadLimitBytes(limitBytes);
+    } catch {
+      /* keep current limit on failure */
+    }
+  }, []);
+
   // Refresh the image quota whenever a chat or the create form is open (and
   // every minute, so the button re-enables once the rolling hour passes).
   useEffect(() => {
     if (view === 'chat' || view === 'new') {
       refreshQuota();
-      const id = setInterval(refreshQuota, 60000);
+      refreshUploadLimit();
+      const id = setInterval(() => { refreshQuota(); refreshUploadLimit(); }, 60000);
       return () => clearInterval(id);
     }
-  }, [view, activeTicket?._id, refreshQuota]);
+  }, [view, activeTicket?._id, refreshQuota, refreshUploadLimit]);
 
   // While viewing the report list, poll so admin replies / unread badges
   // show up live without the user manually refreshing the page.
@@ -634,6 +676,82 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
     setIsSending(false);
   };
 
+  // Send a single video or document. If it exceeds the current limit we DON'T
+  // upload — we immediately post the "limit reached / higher limit requested"
+  // system notice in the chat (admin sees it as a new message and can grant a
+  // bigger limit). Within the limit, we upload in chunks with a progress bar.
+  const handleSendFile = async (file: File, kind: 'video' | 'file') => {
+    if (!activeTicket) return;
+    const ticketId = activeTicket._id.toString();
+
+    // --- Over the limit → cancel + request a higher limit ---
+    if (file.size > uploadLimitBytes) {
+      toast({
+        variant: 'destructive',
+        title: 'Upload limit reached',
+        description: `This ${kind} is ${formatBytes(file.size)}. Your limit is ${formatBytes(uploadLimitBytes)}. A higher limit has been requested.`,
+      });
+      const res = await requestUploadLimitIncrease(ticketId, file.name, file.size);
+      if (!res.success) {
+        toast({ variant: 'destructive', title: 'Error', description: res.message });
+      }
+      const fresh = await getMyTicket(ticketId);
+      if (fresh) setActiveTicket(fresh);
+      refreshList();
+      return;
+    }
+
+    setIsSending(true);
+    sendingRef.current = true;
+    setFileProgress(0);
+
+    // Optimistic bubble showing the upload in flight.
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: SupportTicket = {
+      ...activeTicket,
+      messages: [
+        ...activeTicket.messages,
+        {
+          _id: tempId as any,
+          sender: 'user',
+          text: '',
+          files: [{ _id: 'temp-file', filename: file.name, contentType: file.type, size: file.size, kind }],
+          uploading: true,
+          createdAt: new Date().toISOString() as any,
+        } as SupportMessage,
+      ],
+      lastSenderRole: 'user',
+    };
+    setActiveTicket(optimistic);
+
+    const up = await uploadFileInChunks(file, ticketId, (f) => setFileProgress(f));
+
+    if (up.success && up.fileId) {
+      await sendUserFileMessage(ticketId, [up.fileId], '');
+    } else if (up.code === 'LIMIT_EXCEEDED') {
+      // Race: limit changed mid-upload. Fall back to a limit request.
+      await requestUploadLimitIncrease(ticketId, file.name, file.size);
+      toast({ variant: 'destructive', title: 'Upload limit reached', description: 'A higher limit has been requested.' });
+    } else {
+      toast({ variant: 'destructive', title: 'Could not send', description: up.message || 'Upload failed.' });
+    }
+
+    const fresh = await getMyTicket(ticketId);
+    if (fresh) setActiveTicket(fresh);
+    setFileProgress(null);
+    refreshList();
+    sendingRef.current = false;
+    setIsSending(false);
+  };
+
+  // Validate + send a chosen video/document (one at a time).
+  const handleMediaSelect = async (e: React.ChangeEvent<HTMLInputElement>, kind: 'video' | 'file') => {
+    const file = (e.target.files || [])[0];
+    e.target.value = '';
+    if (!file) return;
+    await handleSendFile(file, kind);
+  };
+
   // Open the create-report form, but require login first for logged-out users.
   const handleCreateReportClick = () => {
     if (!initialUser) {
@@ -701,6 +819,16 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
               const prev = idx > 0 ? activeTicket.messages[idx - 1] : null;
               const showDate =
                 !prev || !isSameDay(new Date(prev.createdAt as any), new Date(msg.createdAt as any));
+
+              // System notices (limit requested / granted) render as a centered banner.
+              if (isSystemMessage(msg)) {
+                return (
+                  <Fragment key={msg._id?.toString() || idx}>
+                    {showDate && <DateSeparator date={msg.createdAt as any} />}
+                    <SystemNotice message={msg.text} type={(msg as any).systemType} />
+                  </Fragment>
+                );
+              }
               return (
                 <Fragment key={msg._id?.toString() || idx}>
                   {showDate && <DateSeparator date={msg.createdAt as any} />}
@@ -725,6 +853,13 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                           onZoom={(url) => setZoomedImage(url)}
                           uploading={(msg as any).uploading}
                           progress={(msg as any).uploading ? uploadProgress : null}
+                        />
+                      )}
+                      {msg.files && msg.files.length > 0 && (
+                        <FileAttachments
+                          files={msg.files}
+                          uploading={(msg as any).uploading}
+                          progress={(msg as any).uploading ? fileProgress : null}
                         />
                       )}
                       <div className="px-1.5 pb-1 pt-0.5">
@@ -781,6 +916,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
 
           {/* Input bar */}
           <div className="flex items-end gap-2 bg-[#F0F0F0] px-2.5 py-2 border-t">
+            {/* Hidden inputs: one per attachment type. */}
             <input
               ref={fileInputRef}
               type="file"
@@ -789,15 +925,52 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
               className="hidden"
               onChange={handleFileSelect}
             />
-            <Button
-              onClick={handleAttachClick}
-              size="icon"
-              variant="ghost"
-              title={imageRemaining > 0 ? `Attach images (${imageRemaining} left this hour)` : 'You can only send 10 images in every hour'}
-              className={`h-11 w-11 rounded-full shrink-0 text-[#075E54] hover:bg-black/5 ${imageRemaining <= 0 ? 'opacity-40' : ''}`}
-            >
-              <ImagePlus className="h-5 w-5" />
-            </Button>
+            <input
+              ref={videoInputRef}
+              type="file"
+              accept="video/*"
+              className="hidden"
+              onChange={(e) => handleMediaSelect(e, 'video')}
+            />
+            <input
+              ref={docInputRef}
+              type="file"
+              className="hidden"
+              onChange={(e) => handleMediaSelect(e, 'file')}
+            />
+            {/* Gallery / attachment menu: Photos, Videos, Files. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  title="Attach"
+                  disabled={isSending}
+                  className="h-11 w-11 rounded-full shrink-0 text-[#075E54] hover:bg-black/5"
+                >
+                  <Paperclip className="h-5 w-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              {/* z-[80] keeps the menu above the fixed chat overlay (z-[60]),
+                  otherwise it renders in its portal behind the chat and is invisible. */}
+              <DropdownMenuContent align="start" side="top" className="z-[80] mb-1">
+                <DropdownMenuItem onClick={handleAttachClick}>
+                  <ImageIcon className="h-4 w-4 mr-2 text-violet-600" />
+                  Photos
+                  <span className="ml-auto pl-3 text-[10px] text-muted-foreground">8 MB</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => videoInputRef.current?.click()}>
+                  <Film className="h-4 w-4 mr-2 text-rose-600" />
+                  Videos
+                  <span className="ml-auto pl-3 text-[10px] text-muted-foreground">{formatBytes(uploadLimitBytes)}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => docInputRef.current?.click()}>
+                  <FileText className="h-4 w-4 mr-2 text-sky-600" />
+                  Files
+                  <span className="ml-auto pl-3 text-[10px] text-muted-foreground">{formatBytes(uploadLimitBytes)}</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Textarea
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
@@ -1008,11 +1181,18 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                     </span>
                   </div>
                   <p className="text-sm text-muted-foreground truncate">
-                    {last
-                      ? `${last.sender === 'admin' ? 'Garena: ' : 'You: '}${
-                          last.text || (last.imageIds && last.imageIds.length > 0 ? '📷 Photo' : '')
-                        }`
-                      : 'No messages'}
+                    {!last
+                      ? 'No messages'
+                      : (last as any).kind === 'system'
+                      ? last.text
+                      : `${last.sender === 'admin' ? 'Garena: ' : 'You: '}${
+                          last.text ||
+                          (last.imageIds && last.imageIds.length > 0
+                            ? '📷 Photo'
+                            : last.fileIds && last.fileIds.length > 0
+                            ? '📎 Attachment'
+                            : '')
+                        }`}
                   </p>
                 </div>
                 {ticket.userUnread > 0 && (
