@@ -18,6 +18,7 @@ const navLinks = [
   { href: '/refund', label: 'Refund Policy' },
   { href: '/delivery-policy', label: 'Delivery' },
   { href: '/contact', label: 'Contact' },
+  { href: '/support', label: 'Support' },
 ];
 
 interface NavigationLinksProps {

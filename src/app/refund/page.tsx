@@ -23,7 +23,16 @@ export default function RefundPolicyPage() {
             Refund Policy
           </h1>
           <p className="text-center text-muted-foreground mb-8">Last Updated: {currentDate}</p>
-          
+
+          <div className="flex justify-center mb-8">
+            <Link
+              href="/refundstatus"
+              className="inline-flex items-center justify-center rounded-md bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow transition-colors hover:bg-primary/90"
+            >
+              Check Refund Status
+            </Link>
+          </div>
+
           <div className="prose prose-lg max-w-none text-foreground space-y-6">
             <p>
               At Garena, we strive to ensure a seamless and satisfactory experience for all our users. As the official and trusted store, we are committed to transparency. This policy outlines the conditions under which refunds can be processed for purchases made on our website.
