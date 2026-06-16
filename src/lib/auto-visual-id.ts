@@ -4,6 +4,7 @@
 import { connectToDatabase } from '@/lib/mongodb';
 import { type User, type Order, type VisualIdPromotionLog, type Notification } from '@/lib/definitions';
 import { sendPushNotification } from './push-notifications';
+import { buildAccountNoticeHtml } from './account-notice-card';
 
 /**
  * Checks if a user is eligible for a smart visual ID based on their order history and sets it if they are.
@@ -64,9 +65,16 @@ export async function setSmartVisualId(user: User): Promise<void> {
 
     // Create and send notification
     const notificationMessage = `Account Notice: This ${smartId} UID is wrong, please log out and register with your correct ID to ensure proper delivery of items. You can view your order history at: https://www.garenafreefire.store/order`;
+    // Rich, icon-led card for the bell (the same-tab + silent client-side
+    // navigation is applied automatically when the bell renders it, just like
+    // the refund card). The order link uses the configured base URL so it loads
+    // silently on the live site. The plain `message` above stays as the fallback.
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002';
+    const orderUrl = `${baseUrl}/order`;
     const newNotification: Omit<Notification, '_id'> = {
         gamingId: user.gamingId,
         message: notificationMessage,
+        html: buildAccountNoticeHtml({ wrongId: smartId, orderUrl }),
         isRead: false,
         createdAt: new Date(),
     };
@@ -75,8 +83,8 @@ export async function setSmartVisualId(user: User): Promise<void> {
     if (user.fcmToken) {
       await sendPushNotification({
         token: user.fcmToken,
-        title: 'Garena Store: Important Account Notice',
-        body: `This ${smartId} UID is wrong, Please check your account details.`,
+        title: 'Garena Store: Account Notice',
+        body: `We couldn't find your UID (${smartId}). Please check the UID you provided.`,
       });
     }
 
