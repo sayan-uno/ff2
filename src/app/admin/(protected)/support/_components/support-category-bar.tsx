@@ -1,13 +1,17 @@
 'use client';
 
-import { Inbox, AlertTriangle, Ban, Lock, Paperclip } from 'lucide-react';
+import { Inbox, AlertTriangle, Ban, Lock, Paperclip, Mail, MessageSquareReply } from 'lucide-react';
 
-// The five inbox categories. 'all' keeps the original behaviour; the rest are
-// filtered views with their own bulk actions.
-export type SupportCategory = 'all' | 'escalation' | 'blocked' | 'closed' | 'attachments';
+// The inbox categories. 'all' keeps the original behaviour; the rest are
+// filtered views with their own bulk actions. 'unread' lists every report the
+// admin hasn't opened yet, oldest-first (handled in the client). 'unreplied'
+// lists reports the admin has opened (read) but not yet replied to, newest-first.
+export type SupportCategory = 'all' | 'unread' | 'unreplied' | 'escalation' | 'blocked' | 'closed' | 'attachments';
 
 const CATEGORIES: { key: SupportCategory; label: string; icon: typeof Inbox }[] = [
     { key: 'all', label: 'All', icon: Inbox },
+    { key: 'unread', label: 'Unread', icon: Mail },
+    { key: 'unreplied', label: 'Not Replied', icon: MessageSquareReply },
     { key: 'escalation', label: 'Escalation', icon: AlertTriangle },
     { key: 'blocked', label: 'Blocked', icon: Ban },
     { key: 'closed', label: 'Closed', icon: Lock },

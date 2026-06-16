@@ -52,6 +52,7 @@ import {
   Pencil,
   ImageOff,
   AlertTriangle,
+  Mail,
 } from 'lucide-react';
 import AcceptRefundDialog from './accept-refund-dialog';
 import SupportUserIdentityHeader from './support-user-identity-header';
@@ -84,6 +85,7 @@ import {
   bulkUnblockSupportUsers,
   bulkDeleteReportAttachments,
 } from '@/app/support/category-actions';
+import { markTicketUnreadByAdmin } from '@/app/support/unread-actions';
 import SupportCategoryBar, { type SupportCategory } from './support-category-bar';
 import {
   uploadFileInChunks,
@@ -700,6 +702,10 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const matchesCategory = useCallback(
     (t: SupportTicket, cat: SupportCategory) => {
       switch (cat) {
+        case 'unread': return (t.adminUnread || 0) > 0;
+        // Read by the admin (adminUnread cleared on open) but the latest message
+        // is still the user's — i.e. opened but not yet replied to.
+        case 'unreplied': return (t.adminUnread || 0) === 0 && t.lastSenderRole === 'user';
         case 'escalation': return !!t.escalated;
         case 'blocked': return blockedIds.has(t.gamingId);
         case 'closed': return t.status === 'closed';
@@ -730,11 +736,25 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   });
 
   // The list shown for the active category (time/search already applied).
-  const filtered = timeSearchFiltered.filter((t) => matchesCategory(t, category));
+  const categoryFiltered = timeSearchFiltered.filter((t) => matchesCategory(t, category));
+
+  // In the Unread queue, show the oldest waiting report at the top and newer
+  // ones below, so the admin works the backlog FIFO (oldest-first) and replies
+  // in order. Every other category keeps the default newest-first order.
+  const filtered =
+    category === 'unread'
+      ? [...categoryFiltered].sort(
+          (a, b) =>
+            new Date(a.updatedAt as unknown as string).getTime() -
+            new Date(b.updatedAt as unknown as string).getTime()
+        )
+      : categoryFiltered;
 
   // Live chip counts, scoped to the current time/search filter.
   const categoryCounts: Record<SupportCategory, number> = {
     all: timeSearchFiltered.length,
+    unread: timeSearchFiltered.filter((t) => matchesCategory(t, 'unread')).length,
+    unreplied: timeSearchFiltered.filter((t) => matchesCategory(t, 'unreplied')).length,
     escalation: timeSearchFiltered.filter((t) => matchesCategory(t, 'escalation')).length,
     blocked: timeSearchFiltered.filter((t) => matchesCategory(t, 'blocked')).length,
     closed: timeSearchFiltered.filter((t) => matchesCategory(t, 'closed')).length,
@@ -814,6 +834,36 @@ export default function AdminSupportClient({ initialTickets }: Props) {
       toast({ title: next ? 'Escalated' : 'De-escalated', description: result.message });
       const fresh = await getTicketForAdmin(id);
       if (fresh) setActiveTicket(fresh);
+      refreshList();
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: result.message });
+    }
+  };
+
+  // --- Mark the open report unread again (3-dot menu) ---
+  // Opening a report auto-clears its unread flag; this puts it back so a report
+  // opened by mistake returns to the Unread list. We close the conversation
+  // without re-reading it: the conversation pane is dismissed first (which stops
+  // the 5s poll that auto-marks read), then we flag it unread on the server.
+  const handleMarkUnread = async () => {
+    if (!activeTicket) return;
+    const id = activeTicket._id.toString();
+    // Guard the in-flight poll from re-marking the ticket as read.
+    sendingRef.current = true;
+    setActiveId(null);
+    setActiveTicket(null);
+    setStagedImages([]);
+    setReply('');
+    const result = await markTicketUnreadByAdmin(id);
+    sendingRef.current = false;
+    if (result.success) {
+      // Reflect it immediately in the list, then refresh from the server.
+      setTickets((prev) =>
+        prev.map((t) =>
+          t._id.toString() === id ? { ...t, adminUnread: Math.max(1, t.adminUnread || 0) } : t
+        )
+      );
+      toast({ title: 'Marked as unread', description: 'Moved back to the Unread list.' });
       refreshList();
     } else {
       toast({ variant: 'destructive', title: 'Error', description: result.message });
@@ -1178,6 +1228,12 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                       <DropdownMenuItem onClick={() => setShowRefundDialog(true)}>
                         <BadgeCheck className="h-4 w-4 mr-2 text-emerald-600" />
                         Accept refund request
+                      </DropdownMenuItem>
+                      {/* Mark unread: put a report opened by mistake back into the
+                          Unread list, dismissing the conversation without reading it. */}
+                      <DropdownMenuItem onClick={handleMarkUnread}>
+                        <Mail className="h-4 w-4 mr-2 text-[#25D366]" />
+                        Mark as unread
                       </DropdownMenuItem>
                       {/* Escalation: move this report to the technical-team list (or back). */}
                       <DropdownMenuItem onClick={handleToggleEscalation}>
