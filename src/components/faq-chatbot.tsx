@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useRef, type FormEvent, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { Bot, Loader2, Send, Sparkles, Image as ImageIcon, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,6 +19,7 @@ import { useToast } from '@/hooks/use-toast';
 import { askQuestion, getChatHistory } from '@/app/actions';
 import { ScrollArea } from './ui/scroll-area';
 import { type AiLog } from '@/lib/definitions';
+import { handleNotificationCardClick } from '@/lib/same-tab-notification-links';
 import Image from 'next/image';
 import {
   Dialog,
@@ -48,6 +50,7 @@ const FormattedDate = ({ date }: { date?: Date }) => {
 }
 
 const ClickableMessageContent = ({ text }: { text: string }) => {
+  const router = useRouter();
   const urlRegex = /(https?:\/\/[^\s]+|[\w-.]+@[\w-]+\.[\w-.]+)/g;
   const parts = text.split(urlRegex);
 
@@ -63,6 +66,10 @@ const ClickableMessageContent = ({ text }: { text: string }) => {
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-500 hover:underline break-all"
+              // Same-site links (e.g. /order, /support the AI suggests) route
+              // silently in the same tab — no reload. External links and mailto:
+              // are left alone by the helper and keep their normal behaviour.
+              onClick={(e) => handleNotificationCardClick(e, (path) => router.push(path))}
             >
               {part}
             </a>
