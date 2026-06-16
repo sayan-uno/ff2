@@ -53,6 +53,7 @@ import {
 } from './support-attachments';
 import type { SupportTicket, SupportMessage } from '@/lib/support-definitions';
 import GamingIdModal from '@/components/gaming-id-modal';
+import { makeNotificationLinksOpenInSameTab } from '@/lib/same-tab-notification-links';
 
 // A photo staged for sending: the real File (uploaded to GridFS in chunks) plus
 // a data-URI preview shown in the thumbnail strip and optimistic chat bubble.
@@ -890,7 +891,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                           // it stays inside the chat bubble.
                           <div
                             className="max-w-full overflow-hidden [&_img]:max-w-full"
-                            dangerouslySetInnerHTML={{ __html: msg.html }}
+                            dangerouslySetInnerHTML={{ __html: makeNotificationLinksOpenInSameTab(msg.html) }}
                           />
                         ) : (
                           msg.text && <LinkifiedText text={msg.text} />

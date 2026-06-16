@@ -16,6 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { markNotificationsAsRead, getNotificationsForUser } from '@/app/actions';
 import type { Notification } from '@/lib/definitions';
 import ProductMedia from '../product-media';
+import { makeNotificationLinksOpenInSameTab } from '@/lib/same-tab-notification-links';
 
 interface NotificationBellProps {
   notifications: Notification[];
@@ -127,7 +128,7 @@ export default function NotificationBell({ notifications: initialNotifications, 
                   // overflow the notification sheet.
                   <div
                     className="max-w-full overflow-hidden [&_img]:max-w-full [&_a]:break-words"
-                    dangerouslySetInnerHTML={{ __html: notification.html }}
+                    dangerouslySetInnerHTML={{ __html: makeNotificationLinksOpenInSameTab(notification.html) }}
                   />
                 ) : (
                   <ClickableMessage message={notification.message} />
