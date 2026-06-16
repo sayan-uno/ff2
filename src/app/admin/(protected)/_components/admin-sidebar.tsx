@@ -17,6 +17,7 @@ const navItems = [
   { href: '/admin/active-users', label: 'Active Users', icon: Activity },
   { href: '/admin/users', label: 'User Management', icon: ShieldBan },
   { href: '/admin/notifications', label: 'Send Notification', icon: Bell },
+  { href: '/admin/html-notifier', label: 'HTML Notifier', icon: FileCode },
   { href: '/admin/support', label: 'Support Inbox', icon: Headset },
   { href: '/admin/refunds', label: 'Accepted Refunds', icon: ReceiptText },
   { href: '/admin/payment-sessions', label: 'Payment Sessions', icon: Timer },
