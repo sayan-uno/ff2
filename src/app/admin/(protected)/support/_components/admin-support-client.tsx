@@ -1100,7 +1100,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                 </div>
               )}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
               {filtered.length === 0 ? (
                 <div className="text-center text-muted-foreground py-16 text-sm">No reports found.</div>
               ) : (
@@ -1293,7 +1293,7 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                 {/* Messages */}
                 <div
                   ref={messagesContainerRef}
-                  className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1.5"
+                  className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-4 space-y-1.5"
                   style={{ backgroundColor: '#ECE5DD' }}
                 >
                   {activeTicket.messages.map((msg, idx) => {
