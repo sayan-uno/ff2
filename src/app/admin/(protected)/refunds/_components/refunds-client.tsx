@@ -38,10 +38,13 @@ import {
   deleteAcceptedRefundsInRange,
   type AdminRefundListItem,
 } from '@/app/actions/refund';
+import { getAcceptedRefundsCount } from '@/app/actions/refund-stats';
+import { RefundCountBadge } from './refund-count-badge';
 
 interface Props {
   initialRefunds: AdminRefundListItem[];
   initialHasMore: boolean;
+  initialCount: number;
 }
 
 type SortDir = 'asc' | 'desc';
@@ -75,10 +78,11 @@ function FormattedDate({ value }: { value: string }) {
   );
 }
 
-export default function RefundsClient({ initialRefunds, initialHasMore }: Props) {
+export default function RefundsClient({ initialRefunds, initialHasMore, initialCount }: Props) {
   const { toast } = useToast();
   const [refunds, setRefunds] = useState<AdminRefundListItem[]>(initialRefunds);
   const [hasMore, setHasMore] = useState(initialHasMore);
+  const [count, setCount] = useState(initialCount);
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortDir>('desc');
   const [from, setFrom] = useState('');
@@ -96,14 +100,21 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
     const nextFrom = next.from ?? from;
     const nextTo = next.to ?? to;
     startTransition(async () => {
-      const { refunds: rows, hasMore: more } = await getAcceptedRefunds({
-        page: 1,
-        sort: nextSort,
-        from: nextFrom || undefined,
-        to: nextTo || undefined,
-      });
+      const [{ refunds: rows, hasMore: more }, total] = await Promise.all([
+        getAcceptedRefunds({
+          page: 1,
+          sort: nextSort,
+          from: nextFrom || undefined,
+          to: nextTo || undefined,
+        }),
+        getAcceptedRefundsCount({
+          from: nextFrom || undefined,
+          to: nextTo || undefined,
+        }),
+      ]);
       setRefunds(rows);
       setHasMore(more);
+      setCount(total);
       setPage(1);
       setSelectedIds(new Set());
     });
@@ -161,6 +172,7 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
     setBusyId(null);
     if (result.success) {
       setRefunds((prev) => prev.filter((r) => r._id !== id));
+      setCount((prev) => Math.max(0, prev - 1));
       setSelectedIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -209,6 +221,7 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
       const result = await deleteRefundRequests(ids);
       if (result.success) {
         setRefunds((prev) => prev.filter((r) => !selectedIds.has(r._id)));
+        setCount((prev) => Math.max(0, prev - result.deletedCount));
         setSelectedIds(new Set());
         toast({ title: 'Deleted', description: result.message });
       } else {
@@ -240,6 +253,7 @@ export default function RefundsClient({ initialRefunds, initialHasMore }: Props)
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <CardTitle className="flex items-center gap-2">
               <ReceiptText className="h-5 w-5 text-emerald-600" /> Accepted Refunds
+              <RefundCountBadge count={count} filtered={hasFilter} />
             </CardTitle>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
