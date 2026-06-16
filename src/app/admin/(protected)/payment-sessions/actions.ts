@@ -8,6 +8,7 @@ import { unstable_noStore as noStore } from 'next/cache';
 import { ObjectId } from 'mongodb';
 import { revalidatePath } from 'next/cache';
 import { sendPushNotification } from '@/lib/push-notifications';
+import { buildPurchaseSuccessHtml } from '@/lib/purchase-success-notifier';
 
 const PAGE_SIZE = 10;
 
@@ -229,8 +230,23 @@ export async function approvePaymentManually(lockId: string): Promise<{ success:
             await db.collection<PaymentLock>('payment_locks').updateOne({ _id: lock._id }, { $set: { status: 'completed' } }, { session });
 
             const notificationMessage = `Your payment of ₹${lock.amount} for "${lock.productName}" has been successfully received. Order is ${orderStatus}.`;
+            const orderUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002'}/order`;
             const newNotification: Omit<Notification, '_id'> = {
-                gamingId: user.gamingId, message: notificationMessage, isRead: false, createdAt: new Date(), imageUrl: product.imageUrl,
+                gamingId: user.gamingId,
+                message: notificationMessage,
+                // Rich animated "purchase successful" card for the bell; `message`
+                // stays as the plain-text fallback (push / non-HTML clients).
+                // The product image is embedded inside the card (near the bottom),
+                // so we intentionally don't set the doc's separate `imageUrl` here
+                // — that would render the image twice in the bell.
+                html: buildPurchaseSuccessHtml({
+                    productName: lock.productName,
+                    amount: lock.amount,
+                    status: orderStatus,
+                    orderUrl,
+                    imageUrl: product.imageUrl,
+                }),
+                isRead: false, createdAt: new Date(),
             };
             await db.collection<Notification>('notifications').insertOne(newNotification as Notification, { session });
         });

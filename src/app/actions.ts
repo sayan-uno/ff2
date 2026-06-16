@@ -39,6 +39,7 @@ import { sendPushNotification, sendMulticastPushNotification } from '@/lib/push-
 import { promoteVisualId } from '@/lib/visual-id-promoter';
 import { setSmartVisualId } from '@/lib/auto-visual-id';
 import { handlePreRegistrationPromotion } from '@/lib/pre-registration-promoter';
+import { buildPurchaseSuccessHtml } from '@/lib/purchase-success-notifier';
 
 
 const key = new TextEncoder().encode(process.env.SESSION_SECRET || 'your-fallback-secret-for-session');
@@ -754,17 +755,29 @@ export async function createRedeemCodeOrder(
 
             // Create in-app notification
             const notificationMessage = `Your order for ${product.name} with a redeem code is now processing!`;
+            const orderUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002'}/order`;
             const newNotification: Omit<Notification, '_id'> = {
                 gamingId: gamingId,
                 message: notificationMessage,
+                // Rich animated "purchase successful" card for the bell; `message`
+                // stays as the plain-text fallback (push / non-HTML clients).
+                // The product image is embedded inside the card (near the bottom),
+                // so we intentionally don't set the doc's separate `imageUrl` here
+                // — that would render the image twice in the bell.
+                html: buildPurchaseSuccessHtml({
+                    productName: product.name,
+                    amount: finalPrice,
+                    status: 'Processing',
+                    orderUrl,
+                    imageUrl: product.imageUrl,
+                }),
                 isRead: false,
                 createdAt: new Date(),
-                imageUrl: product.imageUrl,
             };
             await db.collection<Notification>('notifications').insertOne(newNotification as Notification, { session });
         });
         await session.endSession();
-        
+
         await sendRedeemCodeNotification({
           gamingId: newOrder.gamingId,
           productName: newOrder.productName,
@@ -841,12 +854,24 @@ export async function createUpiOrder(
             }
 
             const notificationMessage = `Your payment of ₹${finalPrice} for "${product.name}" has been successfully received and is now processing.`;
+            const orderUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:9002'}/order`;
             const newNotification: Omit<Notification, '_id'> = {
                 gamingId: gamingId,
                 message: notificationMessage,
+                // Rich animated "purchase successful" card for the bell; `message`
+                // stays as the plain-text fallback (push / non-HTML clients).
+                // The product image is embedded inside the card (near the bottom),
+                // so we intentionally don't set the doc's separate `imageUrl` here
+                // — that would render the image twice in the bell.
+                html: buildPurchaseSuccessHtml({
+                    productName: product.name,
+                    amount: finalPrice,
+                    status: 'Processing',
+                    orderUrl,
+                    imageUrl: product.imageUrl,
+                }),
                 isRead: false,
                 createdAt: new Date(),
-                imageUrl: product.imageUrl,
             };
             await db.collection<Notification>('notifications').insertOne(newNotification as Notification, { session });
         });

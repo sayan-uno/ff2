@@ -4,6 +4,7 @@ import { connectToDatabase } from '@/lib/mongodb';
 import { PaymentLock, SmsWebhookLog, User, Order, Notification, Product, LegacyUser } from '@/lib/definitions';
 import { ObjectId } from 'mongodb';
 import { sendPushNotification } from '@/lib/push-notifications';
+import { buildPurchaseSuccessHtml } from '@/lib/purchase-success-notifier';
 
 // --- SMS Parsing Logic ---
 function parseSms(body: string): { amount: number | null, upiRef: string | null } {
@@ -118,13 +119,25 @@ async function createOrderFromLock(lock: PaymentLock, smsLogId: ObjectId) {
                 { session }
             );
             
-            const notificationMessage = `Your payment of ₹${lock.amount} for "${lock.productName}" has been successfully received. You can see the details and track your order here: https://www.garenafreefire.store/order`;
+            const orderUrl = 'https://www.garenafreefire.store/order';
+            const notificationMessage = `Your payment of ₹${lock.amount} for "${lock.productName}" has been successfully received. You can see the details and track your order here: ${orderUrl}`;
             const newNotification: Omit<Notification, '_id'> = {
                 gamingId: user.gamingId,
                 message: notificationMessage,
+                // Rich animated "purchase successful" card for the bell; `message`
+                // stays as the plain-text fallback (push / non-HTML clients).
+                // The product image is embedded inside the card (near the bottom),
+                // so we intentionally don't set the doc's separate `imageUrl` here
+                // — that would render the image twice in the bell.
+                html: buildPurchaseSuccessHtml({
+                    productName: lock.productName,
+                    amount: lock.amount,
+                    status: orderStatus,
+                    orderUrl,
+                    imageUrl: product.imageUrl,
+                }),
                 isRead: false,
                 createdAt: new Date(),
-                imageUrl: product.imageUrl,
             };
             await db.collection<Notification>('notifications').insertOne(newNotification as Notification, { session });
         });
