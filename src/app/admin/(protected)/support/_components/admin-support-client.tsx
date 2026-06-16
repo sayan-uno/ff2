@@ -314,6 +314,8 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+  // Reply box: auto-grows as the admin types (WhatsApp-style).
+  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
   // Guards the poll from clobbering an in-flight optimistic send.
   const sendingRef = useRef(false);
 
@@ -330,6 +332,25 @@ export default function AdminSupportClient({ initialTickets }: Props) {
       requestAnimationFrame(() => scrollToBottom(false));
     }
   }, [activeTicket?.messages.length, scrollToBottom]);
+
+  // WhatsApp-style auto-growing reply box: it grows one line at a time as the
+  // admin types and caps at ~7 lines, after which it scrolls internally so a
+  // long reply can be reviewed (by scrolling up within the box) before sending.
+  const REPLY_INPUT_MAX_HEIGHT = 160; // ~7 visible lines, then it starts scrolling
+  const autoResizeReplyInput = useCallback(() => {
+    const el = replyTextareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto'; // reset so shrinking works when text is deleted
+    const next = Math.min(el.scrollHeight, REPLY_INPUT_MAX_HEIGHT);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > REPLY_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  }, []);
+
+  // Keep the box sized correctly as the value changes (typing, sending/clearing,
+  // or first opening a ticket).
+  useEffect(() => {
+    autoResizeReplyInput();
+  }, [reply, activeId, autoResizeReplyInput]);
 
   const refreshList = useCallback(async () => {
     const fresh = await getAllTicketsForAdmin();
@@ -1420,17 +1441,12 @@ export default function AdminSupportClient({ initialTickets }: Props) {
                     </DropdownMenuContent>
                   </DropdownMenu>
                   <Textarea
+                    ref={replyTextareaRef}
                     value={reply}
                     onChange={(e) => setReply(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleReply();
-                      }
-                    }}
                     placeholder="Type your reply..."
                     rows={1}
-                    className="flex-1 resize-none bg-white rounded-full px-4 py-2 min-h-[42px] max-h-32 border-0 focus-visible:ring-0 text-[14px]"
+                    className="flex-1 resize-none bg-white rounded-2xl px-4 py-2.5 min-h-[44px] border-0 focus-visible:ring-0 text-[14px] leading-snug shadow-sm"
                   />
                   <Button
                     onClick={handleReply}
