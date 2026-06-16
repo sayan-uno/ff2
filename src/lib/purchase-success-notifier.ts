@@ -105,6 +105,7 @@ export function buildPurchaseSuccessHtml(params: {
         display:flex;align-items:center;justify-content:center;font-size:21px;
         background:#fff;box-shadow:0 0 0 0 rgba(255,255,255,.6);
         animation:pps-pop .55s cubic-bezier(.18,.89,.32,1.28) both,pps-ring 2.2s ease-out .55s infinite;}
+      .pps-badge-img{width:27px;height:27px;object-fit:contain;display:block;}
       .pps-title{font-size:15.5px;font-weight:800;line-height:1.2;letter-spacing:.2px;}
       .pps-sub{font-size:11.5px;opacity:.9;margin-top:2px;}
       .pps-product{margin:13px 0 10px;display:flex;align-items:flex-start;gap:9px;font-size:13px;
@@ -140,7 +141,7 @@ export function buildPurchaseSuccessHtml(params: {
     <div class="pps-glow2"></div>
     ${confetti}
     <div class="pps-head">
-      <div class="pps-badge">🛍️</div>
+      <div class="pps-badge"><img src="/img/garena.png" alt="Garena" class="pps-badge-img" /></div>
       <div>
         <div class="pps-title">Purchase Successful 🎉</div>
         <div class="pps-sub">${subTitle}</div>
