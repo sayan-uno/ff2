@@ -127,10 +127,10 @@ export default function OrderPage() {
             const refund = refundsByOrder[order._id.toString()];
             const refundLabel = refund
               ? refund.status === 'completed'
-                ? 'Refund Completed'
+                ? 'Refunded'
                 : refund.status === 'failed'
-                ? 'Refund Failed'
-                : 'Refund in progress'
+                ? 'Declined'
+                : 'Refunding'
               : null;
             const refundFailed = refund?.status === 'failed';
             const refundInProgress = refund?.status === 'in_progress';

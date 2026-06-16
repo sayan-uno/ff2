@@ -74,12 +74,12 @@ function buildRefundAcceptedHtml(params: {
             .rfa-title{font-size:15px;font-weight:700;line-height:1.2;}
             .rfa-sub{font-size:11.5px;opacity:.85;margin-top:1px;}
             .rfa-products{margin:12px 0 10px;display:flex;flex-direction:column;gap:6px;position:relative;z-index:1;}
-            .rfa-row{display:flex;align-items:center;gap:8px;font-size:12.5px;
+            .rfa-row{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;
                 background:rgba(255,255,255,.12);border-radius:8px;padding:7px 9px;
                 animation:rfa-rise .5s ease both .15s;}
-            .rfa-dot{flex:none;width:7px;height:7px;border-radius:50%;background:#a7f3d0;}
-            .rfa-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-            .rfa-amt{flex:none;font-weight:700;color:#fff;}
+            .rfa-dot{flex:none;width:7px;height:7px;border-radius:50%;background:#a7f3d0;margin-top:5px;}
+            .rfa-name{flex:1;min-width:0;line-height:1.35;overflow-wrap:anywhere;word-break:break-word;}
+            .rfa-amt{flex:none;font-weight:700;color:#fff;white-space:nowrap;}
             .rfa-eta{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;
                 background:rgba(255,255,255,.14);border-radius:999px;padding:4px 10px;margin-bottom:12px;
                 position:relative;z-index:1;}
