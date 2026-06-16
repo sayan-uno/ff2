@@ -53,8 +53,10 @@ import {
   ImageOff,
   AlertTriangle,
   Mail,
+  MessageSquarePlus,
 } from 'lucide-react';
 import AcceptRefundDialog from './accept-refund-dialog';
+import AdminCreateReportDialog from './admin-create-report';
 import SupportUserIdentityHeader from './support-user-identity-header';
 import {
   getAllTicketsForAdmin,
@@ -299,6 +301,8 @@ export default function AdminSupportClient({ initialTickets }: Props) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showRefundDialog, setShowRefundDialog] = useState(false);
+  // Admin-initiated "New report" dialog (search a UID, open a report for them).
+  const [showCreateReport, setShowCreateReport] = useState(false);
   // The open user's video/file upload limit (10MB default, up to 250MB granted).
   const [uploadLimitBytes, setUploadLimitBytes] = useState<number>(DEFAULT_UPLOAD_LIMIT_BYTES);
   const [isSettingLimit, setIsSettingLimit] = useState(false);
@@ -925,16 +929,22 @@ export default function AdminSupportClient({ initialTickets }: Props) {
 
   return (
     <div>
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Inbox className="h-6 w-6" /> Support Inbox
-          {totalUnread > 0 && (
-            <span className="h-6 min-w-6 px-2 rounded-full bg-destructive text-destructive-foreground text-sm flex items-center justify-center">
-              {totalUnread}
-            </span>
-          )}
-        </h1>
-        <p className="text-muted-foreground text-sm">User reports and live chat. Replies appear to the user instantly.</p>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Inbox className="h-6 w-6" /> Support Inbox
+            {totalUnread > 0 && (
+              <span className="h-6 min-w-6 px-2 rounded-full bg-destructive text-destructive-foreground text-sm flex items-center justify-center">
+                {totalUnread}
+              </span>
+            )}
+          </h1>
+          <p className="text-muted-foreground text-sm">User reports and live chat. Replies appear to the user instantly.</p>
+        </div>
+        <Button onClick={() => setShowCreateReport(true)} className="shrink-0">
+          <MessageSquarePlus className="h-4 w-4 mr-2" />
+          New report
+        </Button>
       </div>
 
       <Card className="overflow-hidden">
@@ -1587,6 +1597,23 @@ export default function AdminSupportClient({ initialTickets }: Props) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Admin-initiated "New report" dialog: search a UID and open a report
+          addressed to that user. Self-contained; refreshes the list and opens
+          the new report once it's created. */}
+      <AdminCreateReportDialog
+        open={showCreateReport}
+        onOpenChange={setShowCreateReport}
+        onCreated={async (ticketId) => {
+          await refreshList();
+          const fresh = await getTicketForAdmin(ticketId);
+          if (fresh) {
+            setActiveId(ticketId);
+            setActiveTicket(fresh);
+          }
+        }}
+        onOpenTicket={(ticket) => { setShowCreateReport(false); openTicket(ticket); }}
+      />
 
       {/* Accept refund request dialog */}
       {activeTicket && (
