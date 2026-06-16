@@ -203,7 +203,7 @@ ${message}`;
               rows={5}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              className={cn(attachAttempted && !message && 'border-red-500 focus-visible:ring-red-500')}
+              className={cn('font-sans', attachAttempted && !message && 'border-red-500 focus-visible:ring-red-500')}
             />
           </div>
           <div className="space-y-2">

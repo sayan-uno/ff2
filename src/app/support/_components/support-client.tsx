@@ -168,7 +168,7 @@ function LinkifiedText({ text }: { text: string }) {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const parts = text.split(urlRegex);
   return (
-    <span className="whitespace-pre-wrap break-words">
+    <span className="whitespace-pre-wrap break-words font-sans">
       {parts.map((part, i) =>
         part.match(urlRegex) ? (
           <a
@@ -1004,7 +1004,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
               onChange={(e) => setChatInput(e.target.value)}
               placeholder="Type a message"
               rows={1}
-              className="flex-1 resize-none bg-white rounded-2xl px-4 py-2.5 min-h-[44px] border-0 focus-visible:ring-0 text-[14px] leading-snug shadow-sm"
+              className="flex-1 resize-none bg-white rounded-2xl px-4 py-2.5 min-h-[44px] border-0 focus-visible:ring-0 text-[14px] leading-snug shadow-sm font-sans"
             />
             <Button
               onClick={handleSend}
@@ -1087,7 +1087,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                 placeholder="Please describe your issue in as much detail as possible — include your order, payment UTR, or Free Fire ID if related. The more details you share, the faster we can help you."
                 rows={7}
                 maxLength={2000}
-                className={`resize-none text-[15px] leading-relaxed ${
+                className={`resize-none text-[15px] leading-relaxed font-sans ${
                   createAttachAttempted && !newMessage.trim()
                     ? 'border-red-500 focus-visible:ring-red-500'
                     : ''
@@ -1209,7 +1209,7 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                       )}
                     </span>
                   </div>
-                  <p className="text-sm text-muted-foreground truncate">
+                  <p className="text-sm text-muted-foreground truncate font-sans">
                     {!last
                       ? 'No messages'
                       : (last as any).kind === 'system'

@@ -113,7 +113,7 @@ function RefundCard({ refund, index }: { refund: RefundRequest; index: number })
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-base leading-tight line-clamp-2">{refund.productName}</h3>
-            <p className="mt-1 text-lg font-bold text-emerald-600">₹{refund.amount}</p>
+            <p className="mt-1 text-lg font-bold text-emerald-600 font-sans">₹{refund.amount}</p>
             {refund.utr && (
               <p className="text-[11px] text-muted-foreground truncate">UTR: {refund.utr}</p>
             )}
