@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -53,7 +54,7 @@ import {
 } from './support-attachments';
 import type { SupportTicket, SupportMessage } from '@/lib/support-definitions';
 import GamingIdModal from '@/components/gaming-id-modal';
-import { makeNotificationLinksOpenInSameTab } from '@/lib/same-tab-notification-links';
+import { makeNotificationLinksOpenInSameTab, handleNotificationCardClick } from '@/lib/same-tab-notification-links';
 
 // A photo staged for sending: the real File (uploaded to GridFS in chunks) plus
 // a data-URI preview shown in the thumbnail strip and optimistic chat bubble.
@@ -248,6 +249,7 @@ function ChatHeader({ onBack, onCall }: { onBack: () => void; onCall?: () => voi
 
 export default function SupportClient({ initialUser, initialTickets }: SupportClientProps) {
   const { toast } = useToast();
+  const router = useRouter();
   const [view, setView] = useState<View>('list');
   const [tickets, setTickets] = useState<SupportTicket[]>(initialTickets);
   const [activeTicket, setActiveTicket] = useState<SupportTicket | null>(null);
@@ -891,6 +893,9 @@ export default function SupportClient({ initialUser, initialTickets }: SupportCl
                           // it stays inside the chat bubble.
                           <div
                             className="max-w-full overflow-hidden [&_img]:max-w-full"
+                            onClick={(e) =>
+                              handleNotificationCardClick(e, (path) => router.push(path))
+                            }
                             dangerouslySetInnerHTML={{ __html: makeNotificationLinksOpenInSameTab(msg.html) }}
                           />
                         ) : (

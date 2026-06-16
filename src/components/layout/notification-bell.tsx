@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,7 +17,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { markNotificationsAsRead, getNotificationsForUser } from '@/app/actions';
 import type { Notification } from '@/lib/definitions';
 import ProductMedia from '../product-media';
-import { makeNotificationLinksOpenInSameTab } from '@/lib/same-tab-notification-links';
+import { makeNotificationLinksOpenInSameTab, handleNotificationCardClick } from '@/lib/same-tab-notification-links';
 
 interface NotificationBellProps {
   notifications: Notification[];
@@ -70,6 +71,7 @@ const ClickableMessage = ({ message }: { message: string }) => {
 
 
 export default function NotificationBell({ notifications: initialNotifications, onRefresh }: NotificationBellProps) {
+  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [currentNotifications, setCurrentNotifications] = useState(initialNotifications);
 
@@ -128,6 +130,13 @@ export default function NotificationBell({ notifications: initialNotifications, 
                   // overflow the notification sheet.
                   <div
                     className="max-w-full overflow-hidden [&_img]:max-w-full [&_a]:break-words"
+                    onClick={(e) =>
+                      handleNotificationCardClick(e, (path) => {
+                        // Close the bell sheet, then route client-side (no reload).
+                        setIsOpen(false);
+                        router.push(path);
+                      })
+                    }
                     dangerouslySetInnerHTML={{ __html: makeNotificationLinksOpenInSameTab(notification.html) }}
                   />
                 ) : (
